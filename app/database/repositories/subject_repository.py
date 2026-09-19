@@ -1,0 +1,29 @@
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database.models import Subject
+from app.database.repositories.base import BaseRepository
+
+
+class SubjectRepository(BaseRepository[Subject]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, Subject)
+
+    async def list_for_group(self, group_id: int) -> list[Subject]:
+        stmt = (
+            select(Subject)
+            .where(Subject.group_id == group_id)
+            .order_by(Subject.name)
+        )
+        return list((await self._session.scalars(stmt)).all())
+
+    async def get_by_group_and_name(self, group_id: int, name: str) -> Subject | None:
+        stmt = select(Subject).where(
+            Subject.group_id == group_id,
+            Subject.name == name,
+        )
+        return await self._session.scalar(stmt)
+
+    async def create(self, group_id: int, name: str) -> Subject:
+        subject = Subject(group_id=group_id, name=name)
+        return await self.add(subject)

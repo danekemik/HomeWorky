@@ -1,0 +1,6 @@
+aiogram>=3.13,<4
+SQLAlchemy>=2.0,<3
+asyncpg>=0.30
+alembic>=1.14
+pydantic>=2.9
+pydantic-settings>=2.6
