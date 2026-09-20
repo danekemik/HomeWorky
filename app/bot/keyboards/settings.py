@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.callbacks import MENU_BACK
-from app.bot.keyboards.menu import CB_ONBOARD_JOIN
+from app.bot.keyboards.menu import CB_ONBOARD_JOIN, CB_SETTINGS
 from app.database.models import Group
 
 SET_MANAGE = "set:manage"
@@ -32,7 +32,7 @@ def admin_group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
         builder.button(
             text=f"🎛 {group.name}", callback_data=f"{SET_MANAGE_GROUP}{group.id}"
         )
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
+    builder.button(text="🔙 Назад", callback_data=CB_SETTINGS)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -41,7 +41,7 @@ def management_keyboard(group_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👥 Участники", callback_data=f"{SET_MEMBERS}{group_id}")
     builder.button(text="🔄 Новый код", callback_data=f"{SET_CODE_ROTATE}{group_id}")
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
+    builder.button(text="🔙 Выбор группы", callback_data=SET_MANAGE)
     builder.adjust(1)
     return builder.as_markup()
 

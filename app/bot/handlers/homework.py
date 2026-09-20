@@ -37,6 +37,7 @@ from app.bot.keyboards.homework import (
 )
 from app.bot.keyboards.menu import CB_ADD_HOMEWORK, main_menu_keyboard
 from app.bot.keyboards.views import homework_edit_field_keyboard
+from app.bot.states.group_flow import GroupFlow
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import AttachmentType, User
 from app.services.homework_service import HomeworkService
@@ -523,6 +524,14 @@ async def _render_preview_message(
         await message.edit_text(text, reply_markup=markup)
 
 
+async def _show_pending_fields(message: Message, state: FSMContext) -> None:
+    await state.set_state(HomeworkCreation.attachment)
+    await state.update_data(preview=False, fields=True, from_fields=True)
+    await message.edit_text(
+        "✏️ Что изменить?", reply_markup=pending_edit_fields_keyboard()
+    )
+
+
 async def _show_preview(query: CallbackQuery, state: FSMContext) -> None:
     if not isinstance(query.message, Message):
         await query.answer()
@@ -631,44 +640,45 @@ async def on_flow_cancel(
         await query.answer()
         return
 
+    if state_name == GroupFlow.join_code.state:
+        from app.bot.handlers.menu import render_join_picker
+
+        await render_join_picker(query, session, user)
+        return
+    if state_name == GroupFlow.create_name.state:
+        await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
+
     if _is_base_creation(state_name):
-        if state_name == HomeworkCreation.subject.state:
-            data = await state.get_data()
-            if data.get("title"):
-                await _render_preview_message(message, state)
-            else:
-                await _back_to_menu(message, bot, session, user, state)
-            await query.answer()
-            return
+        data = await state.get_data()
         if state_name == HomeworkCreation.new_subject.state:
             await render_subject_picker(query, bot, session, user, state)
             return
-        if state_name in (
-            HomeworkCreation.title.state,
-            HomeworkCreation.description.state,
-            HomeworkCreation.deadline.state,
-        ):
-            if (await state.get_data()).get("from_fields"):
-                await _render_preview_message(message, state)
-                await query.answer()
-                return
-            if state_name == HomeworkCreation.title.state:
-                await render_subject_picker(query, bot, session, user, state)
-            elif state_name == HomeworkCreation.description.state:
-                await state.set_state(HomeworkCreation.title)
-                await message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
-            else:
-                await state.set_state(HomeworkCreation.description)
-                await message.edit_text(
-                    DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard()
-                )
+        if data.get("fields"):
+            await _render_preview_message(message, state)
             await query.answer()
             return
-        if state_name == HomeworkCreation.attachment.state:
-            data = await state.get_data()
-            if data.get("from_fields") and not data.get("preview"):
-                await _render_preview_message(message, state)
-            elif data.get("preview"):
+        if data.get("from_fields"):
+            await _show_pending_fields(message, state)
+            await query.answer()
+            return
+        if state_name == HomeworkCreation.subject.state:
+            await _back_to_menu(message, bot, session, user, state)
+            await query.answer()
+            return
+        if state_name == HomeworkCreation.title.state:
+            await render_subject_picker(query, bot, session, user, state)
+        elif state_name == HomeworkCreation.description.state:
+            await state.set_state(HomeworkCreation.title)
+            await message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
+        elif state_name == HomeworkCreation.deadline.state:
+            await state.set_state(HomeworkCreation.description)
+            await message.edit_text(
+                DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard()
+            )
+        elif state_name == HomeworkCreation.attachment.state:
+            if data.get("preview"):
                 await state.update_data(preview=False)
                 has = bool(data.get("attachments") or data.get("links"))
                 await message.edit_text(
@@ -685,9 +695,6 @@ async def on_flow_cancel(
                 await message.edit_text(
                     DEADLINE_PENDING, reply_markup=build_calendar_markup(cursor)
                 )
-            await query.answer()
-            return
-        await _back_to_menu(message, bot, session, user, state)
         await query.answer()
         return
 

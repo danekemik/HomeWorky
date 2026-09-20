@@ -6,15 +6,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.callbacks import MENU_BACK
 from app.bot.context import select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.filters.chat_type import ChatTypeFilter
 from app.bot.formats import esc
+from app.bot.keyboards.homework import back_only_keyboard
 from app.bot.keyboards.menu import (
     CB_JOIN_PICK,
     CB_ONBOARD_CREATE,
     CB_ONBOARD_JOIN,
     CB_PICK_GROUP_PREFIX,
+    CB_SETTINGS,
     group_picker_keyboard,
     join_group_picker_keyboard,
     main_menu_keyboard,
@@ -132,7 +135,7 @@ async def on_create_group(
         await query.answer()
         return
     await state.set_state(GroupFlow.create_name)
-    await message.edit_text(CREATE_NAME_PENDING)
+    await message.edit_text(CREATE_NAME_PENDING, reply_markup=back_only_keyboard())
     await query.answer()
 
 
@@ -164,10 +167,8 @@ async def on_create_group_name(
     )
 
 
-@router.callback_query(CallbackDataPrefix(CB_ONBOARD_JOIN))
-async def on_join_start(
-    query: CallbackQuery,
-    session: AsyncSession,
+async def render_join_picker(
+    query: CallbackQuery, session: AsyncSession, user: User
 ) -> None:
     message = query.message
     if not isinstance(message, Message):
@@ -180,8 +181,22 @@ async def on_join_start(
         )
         await query.answer()
         return
-    await message.edit_text(JOIN_PICK_TEXT, reply_markup=join_group_picker_keyboard(groups))
+    has_group = bool(await GroupService(session).list_groups_for_user(user))
+    back_callback = CB_SETTINGS if has_group else MENU_BACK
+    await message.edit_text(
+        JOIN_PICK_TEXT,
+        reply_markup=join_group_picker_keyboard(groups, back_callback),
+    )
     await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(CB_ONBOARD_JOIN))
+async def on_join_start(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    await render_join_picker(query, session, user)
 
 
 @router.callback_query(CallbackDataPrefix(CB_JOIN_PICK))
@@ -196,7 +211,7 @@ async def on_join_pick(
     group_id = int(query.data[len(CB_JOIN_PICK):])
     await state.set_state(GroupFlow.join_code)
     await state.update_data(join_group_id=group_id)
-    await message.edit_text(JOIN_CODE_PENDING)
+    await message.edit_text(JOIN_CODE_PENDING, reply_markup=back_only_keyboard())
     await query.answer()
 
 

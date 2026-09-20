@@ -54,12 +54,17 @@ def group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def join_group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
+def join_group_picker_keyboard(
+    groups: list[Group], back_callback: str = MENU_BACK
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for group in groups:
         builder.button(
             text=f"🎓 {group.name}", callback_data=f"{CB_JOIN_PICK}{group.id}"
         )
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
+    builder.button(
+        text=("🔙 В меню" if back_callback == MENU_BACK else "🔙 Назад"),
+        callback_data=back_callback,
+    )
     builder.adjust(1)
     return builder.as_markup()

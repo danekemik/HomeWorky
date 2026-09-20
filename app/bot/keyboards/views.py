@@ -11,6 +11,7 @@ from app.bot.callbacks import (
     PAGE,
     VIEWS,
 )
+from app.bot.keyboards.menu import CB_ALL_TASKS
 
 PAGE_SIZE = 8
 
@@ -35,7 +36,7 @@ def homework_list_keyboard(
     builder = InlineKeyboardBuilder()
     for homework_id, label in items:
         builder.button(text=label, callback_data=f"{HW_DETAIL}{homework_id}")
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
+    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data=CB_ALL_TASKS))
     if has_prev:
         builder.button(text="◀️ Назад", callback_data=f"{PAGE}{category}:{page - 1}")
     if has_next:
@@ -62,7 +63,8 @@ def homework_edit_field_keyboard(homework_id: int | None = None) -> InlineKeyboa
     builder.button(text="📝 Описание", callback_data=f"{HW_EDIT_FIELD}description")
     builder.button(text="📅 Дата сдачи", callback_data=f"{HW_EDIT_FIELD}deadline")
     builder.button(text="📎 Файлы и ссылки", callback_data=f"{HW_EDIT_FIELD}attachment")
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
+    back_data = f"{HW_DETAIL}{homework_id}" if homework_id is not None else MENU_BACK
+    builder.button(text="🔙 Назад", callback_data=back_data)
     builder.adjust(2, 2, 1)
     return builder.as_markup()
 
