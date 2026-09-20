@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -144,6 +144,16 @@ class HomeworkRepository(BaseRepository[Homework]):
         self._session.add(link)
         await self._session.flush()
         return link
+
+    async def clear_attachments(self, homework_id: int) -> None:
+        await self._session.execute(
+            delete(Attachment).where(Attachment.homework_id == homework_id)
+        )
+
+    async def clear_links(self, homework_id: int) -> None:
+        await self._session.execute(
+            delete(HomeworkLink).where(HomeworkLink.homework_id == homework_id)
+        )
 
     async def attachments_for(self, homework_id: int) -> list[Attachment]:
         stmt = (

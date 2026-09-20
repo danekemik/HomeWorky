@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.bot.callbacks import CALENDAR
+from app.bot.callbacks import CALENDAR, FLOW_CANCEL
 from app.config import settings
 
 _MONTHS_NOMINATIVE = (
@@ -94,7 +94,8 @@ def build_calendar_markup(
         ]
         for i in range(0, len(days), 7)
     ]
-    return InlineKeyboardMarkup(inline_keyboard=[top, *grid])
+    back = [InlineKeyboardButton(text="🔙 Назад", callback_data=FLOW_CANCEL)]
+    return InlineKeyboardMarkup(inline_keyboard=[top, *grid, back])
 
 
 def russian_month_name(month: int) -> str:

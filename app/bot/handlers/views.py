@@ -22,7 +22,11 @@ from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import bot_today, build_homework_card, esc, format_homework_label
 from app.bot.handlers.homework import NO_GROUP_TEXT
-from app.bot.keyboards.homework import attachment_keyboard, subject_picker_keyboard
+from app.bot.keyboards.homework import (
+    attachment_keyboard,
+    back_only_keyboard,
+    subject_picker_keyboard,
+)
 from app.bot.keyboards.menu import CB_ALL_TASKS, CB_NEAREST_DEADLINES
 from app.bot.keyboards.views import (
     PAGE_SIZE,
@@ -421,10 +425,10 @@ async def on_edit_field(
         )
     elif field == "attachment":
         await query.message.edit_text(
-            prompt, reply_markup=attachment_keyboard()
+            prompt, reply_markup=attachment_keyboard(False)
         )
     else:
-        await query.message.edit_text(prompt)
+        await query.message.edit_text(prompt, reply_markup=back_only_keyboard())
     await query.answer()
 
 
@@ -567,7 +571,7 @@ async def finalize_edit_attachments(
         return
     if data.get("deadline"):
         homework.deadline = date.fromisoformat(str(data["deadline"]))
-    await service.attach_pending(
+    await service.replace_attachments(
         homework,
         attachments=list(data.get("attachments", [])),  # type: ignore[arg-type]
         links=list(data.get("links", [])),  # type: ignore[arg-type]

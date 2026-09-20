@@ -10,22 +10,33 @@ from app.bot.calendar import build_calendar_markup
 from app.bot.callbacks import (
     ATTACH_DONE,
     ATTACH_SKIP,
+    CALENDAR,
     FLOW_CANCEL,
     HW_EDIT_PENDING,
     HW_SAVE,
     MENU_BACK,
+    PENDING_EDIT_DONE,
+    PENDING_FIELD,
     SKIP,
+    SUBJECT_PICK,
 )
 from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
-from app.bot.formats import bot_today, build_homework_card
+from app.bot.formats import (
+    bot_today,
+    esc,
+    format_date_russian,
+)
 from app.bot.keyboards.homework import (
     attachment_keyboard,
+    back_only_keyboard,
+    pending_edit_fields_keyboard,
     preview_keyboard,
     skip_or_cancel_keyboard,
     subject_picker_keyboard,
 )
 from app.bot.keyboards.menu import CB_ADD_HOMEWORK, main_menu_keyboard
+from app.bot.keyboards.views import homework_edit_field_keyboard
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import AttachmentType, User
 from app.services.homework_service import HomeworkService
@@ -44,13 +55,36 @@ async def on_add_homework(
     state: FSMContext,
 ) -> None:
     await render_subject_picker(query, bot, session, user, state)
-SUBJECT_PENDING = "📚 Выбери предмет:"
-TITLE_PENDING = "✏️ Введи название задания:"
-DESCRIPTION_PENDING = "📝 Добавь описание:"
+SUBJECT_PENDING = (
+    "🐹 *Homy листает блокнот*\n"
+    "\n"
+    "Нашёл список предметов.\n"
+    "\n"
+    "По какому сегодня работаем? 👀"
+)
+TITLE_PENDING = (
+    "📝 НОВОЕ ДЗ\n"
+    "\n"
+    "🐹 *берёт ручку*\n"
+    "\n"
+    "Так, что нам сегодня задали?"
+)
+DESCRIPTION_PENDING = (
+    "🐹 *Homy уже что-то записал*\n"
+    "\n"
+    "Название есть. 👍\n"
+    "\n"
+    "А преподаватель оставил\n"
+    "какие-нибудь дополнительные условия?"
+)
 DEADLINE_PENDING = "📅 Укажи дату сдачи:"
 ATTACH_PENDING = (
-    "📎 Прикрепи файл, фото или ссылку (можно несколько). "
-    "Когда закончишь — нажми «✅ Готово»."
+    "🐹 *Homy освобождает место на столе*\n"
+    "\n"
+    "Так, теперь материалы.\n"
+    "\n"
+    "Есть файл, фото или документ?\n"
+    "Кидай сюда 📎"
 )
 
 
@@ -86,25 +120,32 @@ def _attachment_display(item: dict[str, object]) -> str:
 
 
 def _pending_preview_card(data: dict) -> str:
-    subject = str(data.get("subject_name") or data.get("subject_id") or "—")
+    subject = str(data.get("subject_name") or data.get("subject_id") or "—").upper()
     deadline = date.fromisoformat(str(data["deadline"]))
-    attachment_lines = [
-        _attachment_display(item)
+    attachments = [
+        str(item.get("file_name") or "Файл")
         for item in data.get("attachments", [])  # type: ignore[arg-type]
     ]
-    link_lines = [
+    links = [
         str(link.get("title") or link["url"])
         for link in data.get("links", [])  # type: ignore[arg-type]
     ]
-    return build_homework_card(
-        subject=subject,
-        title=str(data["title"]),
-        deadline=deadline,
-        description=data.get("description") and str(data["description"]),
-        attachment_lines=attachment_lines,
-        link_lines=link_lines,
-        footer_note="Сохранить задание?",
-    )
+    lines = [
+        "🐹 *Homy раскладывает бумаги на столе*",
+        "",
+        f"📚 {subject}",
+        f"📝 {esc(str(data['title']))}",
+    ]
+    description = data.get("description")
+    if description:
+        lines.append(f"🗒 {esc(str(description))}")
+    lines.append(f"📅 {format_date_russian(deadline)}")
+    for item in attachments:
+        lines.append(f"📎 {esc(item)}")
+    for link in links:
+        lines.append(f"🔗 {esc(link)}")
+    lines += ["", "Всё сходится.", "Сохраняем?"]
+    return "\n".join(lines)
 
 
 async def render_calendar(query: CallbackQuery, cursor: date) -> None:
@@ -125,7 +166,10 @@ def _is_base_edit(state: str | None) -> bool:
     return state is not None and state.startswith(HomeworkEditField.__name__)
 
 
-@router.callback_query(StateFilter(HomeworkCreation.subject, HomeworkEditField.field))
+@router.callback_query(
+    StateFilter(HomeworkCreation.subject, HomeworkEditField.field),
+    CallbackDataPrefix(SUBJECT_PICK),
+)
 async def on_subject_pick(
     query: CallbackQuery,
     bot: Bot,
@@ -140,14 +184,23 @@ async def on_subject_pick(
     state_name = await state.get_state()
     value = query.data.split(":", 1)[1]
     if value == "new":
-        text = "➕ Введи название нового предмета:"
+        text = (
+            "🐹 *Homy переворачивает страницу*\n"
+            "\n"
+            "Кажется, такого предмета\n"
+            "у меня ещё нет.\n"
+            "\n"
+            "🐹 *готовится записывать*\n"
+            "\n"
+            "Как его назовём?"
+        )
         new_state = (
             HomeworkCreation.new_subject
             if _is_base_creation(state_name)
             else HomeworkEditField.new_subject
         )
         await state.set_state(new_state)
-        await message.edit_text(text)
+        await message.edit_text(text, reply_markup=back_only_keyboard())
         await query.answer()
         return
 
@@ -199,8 +252,12 @@ async def on_subject_pick(
         subject_id=subject_id,
         subject_name=subject.name if subject is not None else None,
     )
+    if (await state.get_data()).get("from_fields"):
+        await _render_preview_message(message, state)
+        await query.answer()
+        return
     await state.set_state(HomeworkCreation.title)
-    await message.edit_text(TITLE_PENDING)
+    await message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
     await query.answer()
 
 
@@ -266,9 +323,11 @@ async def on_new_subject(
 
         text, markup = _detail_payload(homework, detail, True)
         await message.answer(text, reply_markup=markup)
+    elif (await state.get_data()).get("from_fields"):
+        await _render_preview_message(message, state, answer=True)
     else:
         await state.set_state(HomeworkCreation.title)
-        await message.answer(TITLE_PENDING)
+        await message.answer(TITLE_PENDING, reply_markup=back_only_keyboard())
 
 
 @router.message(StateFilter(HomeworkCreation.title))
@@ -278,6 +337,9 @@ async def on_title(message: Message, state: FSMContext) -> None:
         await message.answer("Название не может быть пустым.")
         return
     await state.update_data(title=title)
+    if (await state.get_data()).get("from_fields"):
+        await _render_preview_message(message, state, answer=True)
+        return
     await state.set_state(HomeworkCreation.description)
     await message.answer(DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard())
 
@@ -285,11 +347,17 @@ async def on_title(message: Message, state: FSMContext) -> None:
 @router.message(StateFilter(HomeworkCreation.description))
 async def on_description(message: Message, state: FSMContext) -> None:
     await state.update_data(description=(message.text or "").strip() or None)
+    if (await state.get_data()).get("from_fields"):
+        await _render_preview_message(message, state, answer=True)
+        return
     await state.set_state(HomeworkCreation.deadline)
     await message.answer(DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today()))
 
 
-@router.callback_query(StateFilter(HomeworkCreation.deadline, HomeworkEditField.deadline))
+@router.callback_query(
+    StateFilter(HomeworkCreation.deadline, HomeworkEditField.deadline),
+    CallbackDataPrefix(CALENDAR),
+)
 async def on_calendar(
     query: CallbackQuery, state: FSMContext
 ) -> None:
@@ -319,14 +387,18 @@ async def on_calendar(
         await state.update_data(deadline=chosen.isoformat())
         await state.set_state(HomeworkEditField.attachment)
         await query.message.edit_text(
-            ATTACH_PENDING, reply_markup=attachment_keyboard()
+            ATTACH_PENDING, reply_markup=attachment_keyboard(False)
         )
         await query.answer()
         return
 
     await state.update_data(deadline=chosen.isoformat())
+    if (await state.get_data()).get("from_fields"):
+        await _render_preview_message(query.message, state)
+        await query.answer()
+        return
     await state.set_state(HomeworkCreation.attachment)
-    await query.message.edit_text(ATTACH_PENDING, reply_markup=attachment_keyboard())
+    await query.message.edit_text(ATTACH_PENDING, reply_markup=attachment_keyboard(False))
     await query.answer()
 
 
@@ -376,8 +448,30 @@ async def on_attachment_message(
     await message.answer(
         f"➕ Добавлено: 📄 ×{files}, 🔗 ×{links}. "
         "Можно добавить ещё или «✅ Готово».",
-        reply_markup=attachment_keyboard(),
+        reply_markup=attachment_keyboard(True),
     )
+
+
+def _created_confirmation_card(detail: object, homework: object) -> str:
+    lines = [
+        "🐹 *Homy ставит жирную галочку в блокноте*",
+        "",
+        "✓ ЗАПИСАНО",
+        f"📚 {detail.subject.capitalize()}",  # type: ignore[attr-defined]
+        f"📝 {homework.title}",  # type: ignore[attr-defined]
+        f"📅 {format_date_russian(homework.deadline)}",  # type: ignore[attr-defined]
+    ]
+    for item in detail.attachments:  # type: ignore[attr-defined]
+        lines.append(f"📎 {esc(item.file_name or 'Файл')}")
+    for link in detail.links:  # type: ignore[attr-defined]
+        lines.append(f"🔗 {esc(link.title or link.url)}")
+    lines += [
+        "",
+        "🐹 *довольно закрывает блокнот*",
+        "",
+        "Теперь я прослежу,\nчтобы ты не забыл 😎",
+    ]
+    return "\n".join(lines)
 
 
 async def _finalize_creation(
@@ -421,39 +515,30 @@ async def _finalize_creation(
     )
     await state.clear()
     detail = await service.get_detail(homework)
-    text = build_homework_card(
-        subject=detail.subject,
-        title=homework.title,
-        deadline=homework.deadline,
-        description=homework.description,
-        author_name=detail.author_name,
-        attachment_lines=[
-            (
-                item.file_name
-                or (
-                    "🖼 Фото"
-                    if item.file_type == AttachmentType.PHOTO
-                    else "📄 Файл"
-                )
-            )
-            + " (✅)"
-            for item in detail.attachments
-        ],
-        link_lines=[link.title or link.url for link in detail.links],
-        footer_note="✅ Задание создано и появится в списках.",
-    )
+    text = _created_confirmation_card(detail, homework)
     await query.message.edit_text(text, reply_markup=main_menu_keyboard())
     await query.answer("Задание создано ✅", show_alert=False)
+
+
+async def _render_preview_message(
+    message: Message, state: FSMContext, *, answer: bool = False
+) -> None:
+    data = await state.get_data()
+    await state.set_state(HomeworkCreation.attachment)
+    await state.update_data(preview=True, fields=False, from_fields=False)
+    text = _pending_preview_card(data)
+    markup = preview_keyboard()
+    if answer:
+        await message.answer(text, reply_markup=markup)
+    else:
+        await message.edit_text(text, reply_markup=markup)
 
 
 async def _show_preview(query: CallbackQuery, state: FSMContext) -> None:
     if not isinstance(query.message, Message):
         await query.answer()
         return
-    data = await state.get_data()
-    await query.message.edit_text(
-        _pending_preview_card(data), reply_markup=preview_keyboard()
-    )
+    await _render_preview_message(query.message, state)
     await query.answer()
 
 
@@ -501,6 +586,10 @@ async def on_skip(
     state_name = await state.get_state()
     if state_name == HomeworkCreation.description.state:
         await state.update_data(description=None)
+        if (await state.get_data()).get("from_fields"):
+            await _render_preview_message(query.message, state)
+            await query.answer()
+            return
         await state.set_state(HomeworkCreation.deadline)
         await query.message.edit_text(
             DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
@@ -517,6 +606,22 @@ async def on_skip(
     await query.answer()
 
 
+async def _back_to_menu(
+    message: Message,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    from app.bot.handlers.menu import build_menu_payload
+
+    text, markup = await build_menu_payload(
+        session=session, user=user, state=state
+    )
+    await message.edit_text(text, reply_markup=markup)
+
+
 @router.callback_query(CallbackDataPrefix(FLOW_CANCEL))
 async def on_flow_cancel(
     query: CallbackQuery,
@@ -525,16 +630,92 @@ async def on_flow_cancel(
     user: User,
     state: FSMContext,
 ) -> None:
-    await state.clear()
     if not isinstance(query.message, Message):
         await query.answer()
         return
-    from app.bot.handlers.menu import build_menu_payload
+    message = query.message
+    state_name = await state.get_state()
+    if state_name is None:
+        await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
 
-    text, markup = await build_menu_payload(
-        session=session, user=user, state=state
-    )
-    await query.message.edit_text(text, reply_markup=markup)
+    if _is_base_creation(state_name):
+        if state_name == HomeworkCreation.subject.state:
+            data = await state.get_data()
+            if data.get("title"):
+                await _render_preview_message(message, state)
+            else:
+                await _back_to_menu(message, bot, session, user, state)
+            await query.answer()
+            return
+        if state_name == HomeworkCreation.new_subject.state:
+            await render_subject_picker(query, bot, session, user, state)
+            return
+        if state_name in (
+            HomeworkCreation.title.state,
+            HomeworkCreation.description.state,
+            HomeworkCreation.deadline.state,
+        ):
+            if (await state.get_data()).get("from_fields"):
+                await _render_preview_message(message, state)
+                await query.answer()
+                return
+            if state_name == HomeworkCreation.title.state:
+                await render_subject_picker(query, bot, session, user, state)
+            elif state_name == HomeworkCreation.description.state:
+                await state.set_state(HomeworkCreation.title)
+                await message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
+            else:
+                await state.set_state(HomeworkCreation.description)
+                await message.edit_text(
+                    DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard()
+                )
+            await query.answer()
+            return
+        if state_name == HomeworkCreation.attachment.state:
+            data = await state.get_data()
+            if data.get("from_fields") and not data.get("preview"):
+                await _render_preview_message(message, state)
+            elif data.get("preview"):
+                await state.update_data(preview=False)
+                has = bool(data.get("attachments") or data.get("links"))
+                await message.edit_text(
+                    ATTACH_PENDING, reply_markup=attachment_keyboard(has)
+                )
+            else:
+                deadline = data.get("deadline")
+                cursor = (
+                    date.fromisoformat(str(deadline))
+                    if deadline
+                    else bot_today()
+                )
+                await state.set_state(HomeworkCreation.deadline)
+                await message.edit_text(
+                    DEADLINE_PENDING, reply_markup=build_calendar_markup(cursor)
+                )
+            await query.answer()
+            return
+        await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
+
+    if state_name.startswith(HomeworkEditField.__name__):
+        data = await state.get_data()
+        homework_id = data.get("homework_id")
+        if homework_id is None:
+            await _back_to_menu(message, bot, session, user, state)
+            await query.answer()
+            return
+        await state.set_state(HomeworkEditField.field)
+        await message.edit_text(
+            "✏️ Что изменить?",
+            reply_markup=homework_edit_field_keyboard(int(homework_id)),
+        )
+        await query.answer()
+        return
+
+    await _back_to_menu(message, bot, session, user, state)
     await query.answer()
 
 
@@ -546,7 +727,73 @@ async def on_preview_edit_request(
     user: User,
     state: FSMContext,
 ) -> None:
-    await render_subject_picker(query, bot, session, user, state)
+    if not isinstance(query.message, Message):
+        await query.answer()
+        return
+    await state.update_data(preview=False, fields=True, from_fields=True)
+    await query.message.edit_text(
+        "✏️ Что изменить?", reply_markup=pending_edit_fields_keyboard()
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(PENDING_EDIT_DONE))
+async def on_pending_edit_done(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not isinstance(query.message, Message):
+        await query.answer()
+        return
+    await _render_preview_message(query.message, state)
+    await query.answer()
+
+
+@router.callback_query(
+    CallbackDataPrefix(PENDING_FIELD),
+    StateFilter(HomeworkCreation.attachment, HomeworkEditField.field),
+)
+async def on_pending_field_pick(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    field = query.data[len(PENDING_FIELD):]
+    if field == "subject":
+        await state.update_data(fields=False)
+        await render_subject_picker(query, bot, session, user, state)
+        return
+    if field == "title":
+        await state.update_data(fields=False)
+        await state.set_state(HomeworkCreation.title)
+        await query.message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
+    elif field == "description":
+        await state.update_data(fields=False)
+        await state.set_state(HomeworkCreation.description)
+        await query.message.edit_text(
+            DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard()
+        )
+    elif field == "deadline":
+        await state.update_data(fields=False)
+        await state.set_state(HomeworkCreation.deadline)
+        await query.message.edit_text(
+            DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
+        )
+    elif field == "attachment":
+        await state.update_data(fields=False, attachments=[], links=[])
+        await state.set_state(HomeworkCreation.attachment)
+        await query.message.edit_text(
+            ATTACH_PENDING, reply_markup=attachment_keyboard(False)
+        )
+    await query.answer()
 
 
 @router.callback_query(CallbackDataPrefix(HW_SAVE))
