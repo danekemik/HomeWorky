@@ -206,6 +206,7 @@ async def on_nearest_deadlines(
         return
     service = HomeworkService(session)
     today = bot_today()
+    tomorrow = _tomorrow(today)
     today_items, tomorrow_items = await service.nearest(group.id, today)
     subject_names = await service.subject_names(
         group.id, today_items + tomorrow_items
@@ -213,27 +214,37 @@ async def on_nearest_deadlines(
     from aiogram.utils.keyboard import InlineKeyboardBuilder
 
     builder = InlineKeyboardBuilder()
-    parts = ["🔥 <b>Ближайшие дедлайны</b>", ""]
-    parts.append(f"📅 Сегодня ({_date_ru(today)}):")
-    if today_items:
-        for item in today_items:
-            label = _homework_label(item, subject_names)
-            parts.append(esc(label))
-            builder.button(text=label, callback_data=f"{HW_DETAIL}{item.id}")
-    else:
-        parts.append(EMPTY_LINE)
-    parts.append("")
-    parts.append(f"📅 Завтра ({_date_ru(_tomorrow(today))}):")
-    if tomorrow_items:
-        for item in tomorrow_items:
-            label = _homework_label(item, subject_names)
-            parts.append(esc(label))
-            builder.button(text=label, callback_data=f"{HW_DETAIL}{item.id}")
-    else:
-        parts.append(EMPTY_LINE)
+    deadline_label = {today: "сегодня", tomorrow: "завтра"}
+    lines = [
+        "🐹 *Homy открывает календарь и надевает очки*",
+        "Так… что у нас тут горит?",
+        "",
+        "🔥 ДЕДЛАЙНЫ",
+        "",
+    ]
+
+    def add_block(items: list[Homework], day: date) -> None:
+        lines.append(f"📅 {deadline_label[day].capitalize()} ({_date_ru(day)}):")
+        if not items:
+            lines.append(EMPTY_LINE)
+            return
+        for index, item in enumerate(items):
+            if index:
+                lines.append("")
+            subject = subject_names.get(item.subject_id, "—")
+            lines.extend([esc(subject), esc(item.title)])
+            builder.button(
+                text=f"{subject} — {item.title}",
+                callback_data=f"{HW_DETAIL}{item.id}",
+            )
+
+    add_block(today_items, today)
+    lines.append("")
+    add_block(tomorrow_items, tomorrow)
+    lines += ["", "🐹 *закрывает календарь*"]
     builder.button(text="🔙 В меню", callback_data=MENU_BACK)
     builder.adjust(1)
-    await query.message.edit_text("\n".join(parts), reply_markup=builder.as_markup())
+    await query.message.edit_text("\n".join(lines), reply_markup=builder.as_markup())
     await query.answer()
 
 
