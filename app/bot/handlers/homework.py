@@ -122,14 +122,6 @@ def _attachment_display(item: dict[str, object]) -> str:
 def _pending_preview_card(data: dict) -> str:
     subject = str(data.get("subject_name") or data.get("subject_id") or "—").upper()
     deadline = date.fromisoformat(str(data["deadline"]))
-    attachments = [
-        str(item.get("file_name") or "Файл")
-        for item in data.get("attachments", [])  # type: ignore[arg-type]
-    ]
-    links = [
-        str(link.get("title") or link["url"])
-        for link in data.get("links", [])  # type: ignore[arg-type]
-    ]
     lines = [
         "🐹 *Homy раскладывает бумаги на столе*",
         "",
@@ -140,10 +132,11 @@ def _pending_preview_card(data: dict) -> str:
     if description:
         lines.append(f"🗒 {esc(str(description))}")
     lines.append(f"📅 {format_date_russian(deadline)}")
-    for item in attachments:
-        lines.append(f"📎 {esc(item)}")
-    for link in links:
-        lines.append(f"🔗 {esc(link)}")
+    for item in data.get("attachments", []):  # type: ignore[arg-type]
+        if str(item.get("file_type")) == AttachmentType.PHOTO.value:
+            lines.append("🖼 Фото")
+        else:
+            lines.append("📎 Файл")
     lines += ["", "Всё сходится.", "Сохраняем?"]
     return "\n".join(lines)
 
@@ -419,34 +412,27 @@ def _collect_attachment(message: Message) -> dict[str, object] | None:
     return None
 
 
-def _parse_link(text: str) -> dict[str, str | None] | None:
-    stripped = text.strip()
-    if stripped.startswith(("http://", "https://")):
-        return {"url": stripped, "title": None}
-    return None
-
-
 @router.message(StateFilter(HomeworkCreation.attachment, HomeworkEditField.attachment))
 async def on_attachment_message(
     message: Message, bot: Bot, session: AsyncSession, user: User, state: FSMContext
 ) -> None:
-    data = dict(await state.get_data())
     if message.text:
-        link = _parse_link(message.text)
-        if link is not None:
-            data.setdefault("links", []).append(link)
-    else:
-        attachment = _collect_attachment(message)
-        if attachment is not None:
-            data.setdefault("attachments", []).append(attachment)
-        else:
-            await message.answer("Пришли файл 📄, фото 🖼, ссылку 🔗 или нажми «✅ Готово».")
-            return
+        await message.answer("Сюда можно добавить только файл 📄 или фото 🖼.")
+        return
+    data = dict(await state.get_data())
+    attachment = _collect_attachment(message)
+    if attachment is None:
+        await message.answer("Пришли файл 📄, фото 🖼 или нажми «✅ Готово».")
+        return
+    data.setdefault("attachments", []).append(attachment)
     await state.update_data(**data)
-    files = len(data.get("attachments", []))
-    links = len(data.get("links", []))
+    files = sum(
+        str(item.get("file_type")) != AttachmentType.PHOTO.value
+        for item in data["attachments"]
+    )
+    photos = len(data["attachments"]) - files
     await message.answer(
-        f"➕ Добавлено: 📄 ×{files}, 🔗 ×{links}. "
+        f"➕ Добавлено: 📄 файл ×{files}, 🖼 фото ×{photos}. "
         "Можно добавить ещё или «✅ Готово».",
         reply_markup=attachment_keyboard(True),
     )
@@ -462,7 +448,10 @@ def _created_confirmation_card(detail: object, homework: object) -> str:
         f"📅 {format_date_russian(homework.deadline)}",  # type: ignore[attr-defined]
     ]
     for item in detail.attachments:  # type: ignore[attr-defined]
-        lines.append(f"📎 {esc(item.file_name or 'Файл')}")
+        if item.file_type == AttachmentType.PHOTO:  # type: ignore[attr-defined]
+            lines.append("🖼 Фото")
+        else:
+            lines.append("📎 Файл")
     for link in detail.links:  # type: ignore[attr-defined]
         lines.append(f"🔗 {esc(link.title or link.url)}")
     lines += [
@@ -619,7 +608,9 @@ async def _back_to_menu(
     text, markup = await build_menu_payload(
         session=session, user=user, state=state
     )
-    await message.edit_text(text, reply_markup=markup)
+    from app.bot.render import edit_or_resend
+
+    await edit_or_resend(message, text, markup)
 
 
 @router.callback_query(CallbackDataPrefix(FLOW_CANCEL))
@@ -819,10 +810,5 @@ async def on_back_to_menu(
     if not isinstance(query.message, Message):
         await query.answer()
         return
-    from app.bot.handlers.menu import build_menu_payload
-
-    text, markup = await build_menu_payload(
-        session=session, user=user, state=state
-    )
-    await query.message.edit_text(text, reply_markup=markup)
+    await _back_to_menu(query.message, bot, session, user, state)
     await query.answer()

@@ -3,7 +3,7 @@ from datetime import date
 from aiogram.types import Document, Message, PhotoSize, User
 from app.bot.calendar import build_calendar_markup
 from app.bot.formats import esc
-from app.bot.handlers.homework import _collect_attachment, _parse_link
+from app.bot.handlers.homework import _collect_attachment
 from app.database.models import AttachmentType
 
 
@@ -16,13 +16,6 @@ def _message(**fields: object) -> Message:
     }
     base.update(fields)
     return Message.model_validate(base)
-
-
-def test_parse_link_only_http() -> None:
-    assert _parse_link("https://example.com") == {"url": "https://example.com", "title": None}
-    assert _parse_link("http://foo.ru/a") == {"url": "http://foo.ru/a", "title": None}
-    assert _parse_link("просто текст") is None
-    assert _parse_link("www.example.com") is None
 
 
 def test_collect_attachment_key_is_telegram_file_id() -> None:

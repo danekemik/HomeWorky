@@ -35,6 +35,7 @@ from app.bot.keyboards.views import (
     homework_list_keyboard,
     homeworks_category_keyboard,
 )
+from app.bot.render import edit_or_resend
 from app.bot.states.homework import HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
 from app.services.homework_service import HomeworkDetail, HomeworkService
@@ -97,26 +98,72 @@ def _detail_payload(
         deadline=homework.deadline,
         description=homework.description,
         author_name=detail.author_name,
-        attachment_lines=[
-            item.file_name
-            or ("🖼 Фото" if item.file_type == AttachmentType.PHOTO else "📄 Файл")
-            for item in detail.attachments
-        ],
+        attachment_lines=[],
         link_lines=[link.title or link.url for link in detail.links],
     )
     from aiogram.utils.keyboard import InlineKeyboardBuilder
 
     builder = InlineKeyboardBuilder()
-    for attachment in detail.attachments:
-        is_photo = attachment.file_type == AttachmentType.PHOTO
-        label = attachment.file_name or ("🖼 Фото" if is_photo else "📄 Файл")
-        builder.button(text=f"⬇️ {label}", callback_data=f"{FILE_SEND}{homework.id}:{attachment.id}")
     if can_modify:
         builder.button(text="✏️ Изменить", callback_data=f"{HW_EDIT}{homework.id}")
         builder.button(text="🗑 Удалить", callback_data=f"{HW_DELETE}{homework.id}")
     builder.button(text="🔙 В меню", callback_data=MENU_BACK)
     builder.adjust(1)
     return text, builder.as_markup()
+
+
+async def _open_detail(
+    message: Message,
+    bot: Bot,
+    service: HomeworkService,
+    homework: Homework,
+    detail: HomeworkDetail,
+    can_modify: bool,
+) -> None:
+    text, markup = _detail_payload(homework, detail, can_modify)
+    attachments = await service.attachments_for(homework)
+    if not attachments:
+        await message.edit_text(text, reply_markup=markup)
+        return
+    chat_id = message.chat.id
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    first, *rest = attachments
+    try:
+        if first.file_type == AttachmentType.PHOTO:
+            await bot.send_photo(
+                chat_id,
+                first.telegram_file_id,
+                caption=text,
+                reply_markup=markup,
+            )
+        else:
+            await bot.send_document(
+                chat_id,
+                first.telegram_file_id,
+                caption=text,
+                reply_markup=markup,
+            )
+    except Exception:
+        try:
+            await message.answer(text, reply_markup=markup)
+        except Exception:
+            pass
+        return
+    for item in rest:
+        try:
+            if item.file_type == AttachmentType.PHOTO:
+                await bot.send_photo(chat_id, item.telegram_file_id, caption="🖼 Фото")
+            else:
+                await bot.send_document(
+                    chat_id,
+                    item.telegram_file_id,
+                    caption=f"📎 {item.file_name or 'Файл'}",
+                )
+        except Exception:
+            pass
 
 
 async def render_homework_detail(
@@ -324,19 +371,22 @@ async def on_homework_detail(
         await query.answer()
         return
     homework_id = int(query.data[len(HW_DETAIL):])
-    ok = await render_homework_detail(
-        message=query.message,
-        bot=bot,
-        session=session,
-        user=user,
-        state=state,
-        homework_id=homework_id,
-    )
-    if ok:
-        await state.clear()
-        await query.answer()
-    else:
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
         await query.answer("Задание не найдено.", show_alert=True)
+        return
+    detail = await service.get_detail(homework)
+    can_modify = await service.can_modify(user, group.id, homework)
+    await state.clear()
+    await _open_detail(
+        query.message, bot, service, homework, detail, can_modify
+    )
+    await query.answer()
 
 
 @router.callback_query(CallbackDataPrefix(HW_EDIT))
@@ -371,9 +421,10 @@ async def on_edit_homework(
     await state.set_state(HomeworkEditField.field)
     select_current_group(user, group.id)
     await state.update_data(homework_id=homework_id, current_group_id=group.id)
-    await query.message.edit_text(
+    await edit_or_resend(
+        query.message,
         "✏️ Что изменить?",
-        reply_markup=homework_edit_field_keyboard(homework_id),
+        markup=homework_edit_field_keyboard(homework_id),
     )
     await query.answer()
 
@@ -608,8 +659,10 @@ async def on_delete_homework(
         f"💻 {esc(homework.title)}\n"
         f"📅 Дедлайн: {_date_ru(homework.deadline)}"
     )
-    await query.message.edit_text(
-        text, reply_markup=homework_delete_confirm_keyboard(homework_id)
+    await edit_or_resend(
+        query.message,
+        text,
+        markup=homework_delete_confirm_keyboard(homework_id),
     )
     await query.answer()
 
@@ -642,7 +695,9 @@ async def on_delete_confirm(
         )
         return
     await service.delete_homework(homework)
-    await query.message.edit_text("✅ Задание удалено. Нажми /menu для возврата.")
+    await edit_or_resend(
+        query.message, "✅ Задание удалено. Нажми /menu для возврата."
+    )
     await query.answer()
 
 
