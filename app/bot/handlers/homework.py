@@ -18,7 +18,7 @@ from app.bot.callbacks import (
 )
 from app.bot.context import resolve_group
 from app.bot.filters.callback import CallbackDataPrefix
-from app.bot.formats import bot_today, build_homework_card, esc
+from app.bot.formats import bot_today, build_homework_card
 from app.bot.keyboards.homework import (
     attachment_keyboard,
     preview_keyboard,
@@ -72,9 +72,7 @@ async def render_subject_picker(
     await state.update_data(current_group_id=group.id)
     await state.set_state(HomeworkCreation.subject)
     subjects = await HomeworkService(session).list_subjects(group.id)
-    title = group.name
-    text = SUBJECT_PENDING + f"\n\nГруппа: <b>{esc(title)}</b>"
-    await message.edit_text(text, reply_markup=subject_picker_keyboard(subjects))
+    await message.edit_text(SUBJECT_PENDING, reply_markup=subject_picker_keyboard(subjects))
     await query.answer()
 
 
@@ -200,8 +198,7 @@ async def on_subject_pick(
         subject_name=subject.name if subject is not None else None,
     )
     await state.set_state(HomeworkCreation.title)
-    text = TITLE_PENDING + f"\n\nГруппа: <b>{esc(group.name)}</b>"
-    await message.edit_text(text)
+    await message.edit_text(TITLE_PENDING)
     await query.answer()
 
 

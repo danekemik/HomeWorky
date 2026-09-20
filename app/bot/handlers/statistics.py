@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.context import resolve_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.filters.chat_type import ChatTypeFilter
-from app.bot.formats import bot_today, esc
+from app.bot.formats import bot_today
 from app.bot.keyboards.menu import CB_STATS
 from app.bot.keyboards.views import back_to_menu_keyboard
 from app.database.models import User
@@ -63,10 +63,8 @@ async def _render_stats(
     if group is None:
         return NO_GROUP_TEXT, None
     stats = await HomeworkService(session).stats(group.id, user.id, bot_today())
-    title = group.name
     text = (
         "📊 <b>Статистика</b>\n\n"
-        f"Группа: <b>{esc(title)}</b>\n\n"
         f"• Заданий всего: <b>{stats['total']}</b>\n"
         f"• Актуальных: <b>{stats['active']}</b>\n"
         f"• Сдаётся сегодня: <b>{stats['today']}</b>\n"
