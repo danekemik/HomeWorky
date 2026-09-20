@@ -18,7 +18,7 @@ from app.bot.callbacks import (
 )
 from app.bot.context import resolve_group
 from app.bot.filters.callback import CallbackDataPrefix
-from app.bot.formats import bot_today, build_homework_card
+from app.bot.formats import bot_today, build_homework_card, esc
 from app.bot.keyboards.homework import (
     attachment_keyboard,
     preview_keyboard,
@@ -79,7 +79,7 @@ async def render_subject_picker(
     await state.set_state(HomeworkCreation.subject)
     subjects = await HomeworkService(session).list_subjects(group.id)
     title = group.title or f"Группа #{group.id}"
-    text = SUBJECT_PENDING + f"\n\nГруппа: <b>{title}</b>"
+    text = SUBJECT_PENDING + f"\n\nГруппа: <b>{esc(title)}</b>"
     await message.edit_text(text, reply_markup=subject_picker_keyboard(subjects))
     await query.answer()
 
@@ -202,9 +202,13 @@ async def on_subject_pick(
         await query.answer()
         return
 
-    await state.update_data(subject_id=subject_id)
+    subject = await service.get_subject(subject_id)
+    await state.update_data(
+        subject_id=subject_id,
+        subject_name=subject.name if subject is not None else None,
+    )
     await state.set_state(HomeworkCreation.title)
-    text = TITLE_PENDING + f"\n\nГруппа: <b>{group.title}</b>"
+    text = TITLE_PENDING + f"\n\nГруппа: <b>{esc(group.title or '')}</b>"
     await message.edit_text(text)
     await query.answer()
 
@@ -240,15 +244,36 @@ async def on_new_subject(
     if group is None:
         await message.answer(NO_GROUP_TEXT)
         return
+    service = HomeworkService(session)
     subject_id = await _apply_new_subject(
         text=name, group_id=group.id, session=session
     )
-    await state.update_data(current_group_id=group.id, subject_id=subject_id)
+    subject = await service.get_subject(subject_id)
+    await state.update_data(
+        current_group_id=group.id,
+        subject_id=subject_id,
+        subject_name=subject.name if subject is not None else name,
+    )
 
     state_name = await state.get_state()
     if _is_base_edit(state_name):
-        await state.set_state(HomeworkEditField.title)
-        await message.answer("✏️ Введи новое название задания:")
+        homework_id = (await state.get_data()).get("homework_id")
+        homework = (
+            await service.get_for_group(int(homework_id), group.id)
+            if homework_id is not None
+            else None
+        )
+        if homework is None or not await service.can_modify(user, group.id, homework):
+            await state.clear()
+            await message.answer("Доступ запрещён или задание не найдено.")
+            return
+        await service.set_subject(homework, subject_id)
+        await state.clear()
+        detail = await service.get_detail(homework)
+        from app.bot.handlers.views import _detail_payload
+
+        text, markup = _detail_payload(homework, detail, True)
+        await message.answer(text, reply_markup=markup)
     else:
         await state.set_state(HomeworkCreation.title)
         await message.answer(TITLE_PENDING)
@@ -303,10 +328,13 @@ async def on_calendar(
         cursor = date.fromisoformat(payload[4:])
         await render_calendar(query, cursor)
         return
+    if not payload.startswith("day:"):
+        await query.answer()
+        return
 
     state_name = await state.get_state()
     try:
-        chosen = date.fromisoformat(payload)
+        chosen = date.fromisoformat(payload[4:])
     except ValueError:
         await query.answer()
         return
@@ -330,14 +358,14 @@ def _collect_attachment(message: Message) -> dict[str, object] | None:
     if message.document is not None:
         return {
             "file_type": AttachmentType.DOCUMENT.value,
-            "file_id": message.document.file_id,
+            "telegram_file_id": message.document.file_id,
             "file_name": message.document.file_name,
         }
     if message.photo:
         largest = max(message.photo, key=lambda size: size.width * size.height)
         return {
             "file_type": AttachmentType.PHOTO.value,
-            "file_id": largest.file_id,
+            "telegram_file_id": largest.file_id,
             "file_name": None,
         }
     return None
@@ -395,12 +423,13 @@ async def _finalize_creation(
         await state.clear()
         return
     service = HomeworkService(session)
-    deadline = date.fromisoformat(str(data.get("deadline")))
+    deadline_raw = data.get("deadline")
     title = str(data.get("title", "")).strip()
-    if not title or not data.get("subject_id"):
+    if not deadline_raw or not title or not data.get("subject_id"):
         await query.answer("Данные неполные. Начни заново.", show_alert=True)
         await state.clear()
         return
+    deadline = date.fromisoformat(str(deadline_raw))
     homework = await service.create_homework(
         group_id=group.id,
         subject_id=int(data["subject_id"]),
@@ -427,7 +456,16 @@ async def _finalize_creation(
         estimated_minutes=homework.estimated_minutes,
         author_name=detail.author_name,
         attachment_lines=[
-            f"{item.file_name or '📄 Файл'} (✅)" for item in detail.attachments
+            (
+                item.file_name
+                or (
+                    "🖼 Фото"
+                    if item.file_type == AttachmentType.PHOTO
+                    else "📄 Файл"
+                )
+            )
+            + " (✅)"
+            for item in detail.attachments
         ],
         link_lines=[link.title or link.url for link in detail.links],
         footer_note="✅ Задание создано и появится в списках.",
@@ -441,7 +479,6 @@ async def _show_preview(query: CallbackQuery, state: FSMContext) -> None:
         await query.answer()
         return
     data = await state.get_data()
-    await state.clear()
     await query.message.edit_text(
         _pending_preview_card(data), reply_markup=preview_keyboard()
     )

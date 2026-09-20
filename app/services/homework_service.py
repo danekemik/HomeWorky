@@ -232,9 +232,6 @@ class HomeworkService:
                 title=str(title) if title else None,
             )
 
-    def count_for_group(self, group_id: int) -> int:
-        raise NotImplementedError
-
     async def stats(self, group_id: int, user_id: int, today: date) -> dict[str, int]:
         total = await self._repo.count_for_group(group_id)
         created_by_me = await self._repo.count_created_by(group_id, user_id)

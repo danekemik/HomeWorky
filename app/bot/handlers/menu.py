@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.filters.chat_type import ChatTypeFilter
+from app.bot.formats import esc
 from app.bot.keyboards.menu import (
     CB_PICK_GROUP_PREFIX,
     group_picker_keyboard,
@@ -25,14 +26,13 @@ WELCOME_NO_GROUP = (
     "я запомню тебя как её участника. После этого здесь откроется меню."
 )
 
+def _menu_text(group: Group) -> str:
+    title = group.title or f"Группа #{group.id}"
+    return MENU_TEXT.format(title=esc(title))
+
 PICK_GROUP_TEXT = "Выбери свою группу 👇"
 MENU_TEXT = "🎓 Учебный помощник\n\nГруппа: <b>{title}</b>"
 COMING_SOON = "🚧 Этот раздел появится на следующих этапах разработки."
-
-
-def _menu_text(group: Group) -> str:
-    title = group.title or f"Группа #{group.id}"
-    return MENU_TEXT.format(title=title)
 
 
 async def build_menu_payload(
@@ -60,6 +60,7 @@ async def cmd_menu(
     user: User,
     state: FSMContext,
 ) -> None:
+    await state.clear()
     text, markup = await build_menu_payload(
         bot=bot, session=session, user=user, state=state
     )

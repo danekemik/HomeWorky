@@ -20,9 +20,9 @@ from app.bot.callbacks import (
 )
 from app.bot.context import resolve_group
 from app.bot.filters.callback import CallbackDataPrefix
-from app.bot.formats import bot_today, build_homework_card, format_homework_label
+from app.bot.formats import bot_today, build_homework_card, esc, format_homework_label
 from app.bot.handlers.homework import NO_GROUP_TEXT
-from app.bot.keyboards.homework import subject_picker_keyboard
+from app.bot.keyboards.homework import attachment_keyboard, subject_picker_keyboard
 from app.bot.keyboards.menu import CB_ALL_TASKS, CB_NEAREST_DEADLINES
 from app.bot.keyboards.views import (
     PAGE_SIZE,
@@ -168,7 +168,7 @@ async def on_nearest_deadlines(
     if today_items:
         for item in today_items:
             label = _homework_label(item, subject_names)
-            parts.append(label)
+            parts.append(esc(label))
             builder.button(text=label, callback_data=f"{HW_DETAIL}{item.id}")
     else:
         parts.append(EMPTY_LINE)
@@ -177,7 +177,7 @@ async def on_nearest_deadlines(
     if tomorrow_items:
         for item in tomorrow_items:
             label = _homework_label(item, subject_names)
-            parts.append(label)
+            parts.append(esc(label))
             builder.button(text=label, callback_data=f"{HW_DETAIL}{item.id}")
     else:
         parts.append(EMPTY_LINE)
@@ -320,7 +320,7 @@ async def on_homework_detail(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data.split(":", 1)[1])
+    homework_id = int(query.data[len(HW_DETAIL):])
     ok = await render_homework_detail(
         message=query.message,
         bot=bot,
@@ -347,8 +347,10 @@ async def on_edit_homework(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data.split(":", 1)[1])
-    group = await resolve_group(bot, session, user, query.message.chat, state)
+    homework_id = int(query.data[len(HW_EDIT):])
+    group = await resolve_group(
+        bot, session, user, query.message.chat, state
+    )
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
         return
@@ -385,7 +387,7 @@ async def on_edit_field(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    field = query.data.split(":", 1)[1]
+    field = query.data[len(HW_EDIT_FIELD):]
     data = await state.get_data()
     homework_id = data.get("homework_id")
     group = await resolve_group(bot, session, user, query.message.chat, state)
@@ -420,6 +422,10 @@ async def on_edit_field(
     if field == "deadline":
         await query.message.edit_text(
             prompt, reply_markup=build_calendar_markup(bot_today())
+        )
+    elif field == "attachment":
+        await query.message.edit_text(
+            prompt, reply_markup=attachment_keyboard()
         )
     else:
         await query.message.edit_text(prompt)
@@ -612,7 +618,7 @@ async def on_delete_homework(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data.split(":", 1)[1])
+    homework_id = int(query.data[len(HW_DELETE):])
     group = await resolve_group(bot, session, user, query.message.chat, state)
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
@@ -624,7 +630,7 @@ async def on_delete_homework(
         return
     text = (
         "🗑 Удалить задание?\n\n"
-        f"💻 {homework.title}\n"
+        f"💻 {esc(homework.title)}\n"
         f"📅 Дедлайн: {_date_ru(homework.deadline)}"
     )
     await query.message.edit_text(
@@ -644,7 +650,7 @@ async def on_delete_confirm(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data.split(":", 1)[1])
+    homework_id = int(query.data[len(HW_DELETE_CONFIRM):])
     group = await resolve_group(bot, session, user, query.message.chat, state)
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
@@ -680,7 +686,8 @@ async def on_send_file(
     ):
         await query.answer()
         return
-    _, homework_id_raw, attachment_id_raw = query.data.split(":")
+    payload = query.data[len(FILE_SEND):]
+    homework_id_raw, attachment_id_raw = payload.split(":")
     homework_id = int(homework_id_raw)
     attachment_id = int(attachment_id_raw)
     group = await resolve_group(bot, session, user, query.message.chat, state)

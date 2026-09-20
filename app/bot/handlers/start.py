@@ -27,6 +27,7 @@ async def cmd_start_private(
     user: User,
     state: FSMContext,
 ) -> None:
+    await state.clear()
     text, markup = await build_menu_payload(
         bot=bot, session=session, user=user, state=state
     )

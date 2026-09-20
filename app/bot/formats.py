@@ -1,8 +1,13 @@
 from datetime import date, datetime
+from html import escape as _escape
 
 from app.bot.calendar import russian_month_name
 from app.config import settings
 from app.services.notification_service import format_deadline
+
+
+def esc(value: str | None) -> str:
+    return _escape(value or "", quote=False)
 
 
 def bot_today() -> date:
@@ -37,22 +42,22 @@ def build_homework_card(
     link_lines: list[str] | None = None,
     footer_note: str | None = None,
 ) -> str:
-    lines = [f"📚 {subject}", "", f"💻 {title}"]
+    lines = [f"📚 {esc(subject)}", "", f"💻 {esc(title)}"]
     if description:
-        lines += ["", f"📝 {description}"]
+        lines += ["", f"📝 {esc(description)}"]
     lines += ["", f"📅 Дедлайн: {format_date_russian(deadline)}"]
     if estimated_minutes is not None:
         lines.append(f"⏱ Оценка: {format_minutes(estimated_minutes)}")
     if author_name:
-        lines.append(f"👤 Добавил: {author_name}")
+        lines.append(f"👤 Добавил: {esc(author_name)}")
     attachments = attachment_lines or []
     if attachments:
         lines += ["", "📎 Файлы:"]
-        lines += [f"  • {line}" for line in attachments]
+        lines += [f"  • {esc(line)}" for line in attachments]
     links = link_lines or []
     if links:
         lines += ["", "🔗 Ссылки:"]
-        lines += [f"  • {line}" for line in links]
+        lines += [f"  • {esc(line)}" for line in links]
     if footer_note:
-        lines += ["", footer_note]
+        lines += ["", esc(footer_note)]
     return "\n".join(lines)

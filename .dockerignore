@@ -11,4 +11,3 @@ README.md
 *.md
 docker-compose.yml
 Dockerfile
-entrypoint.sh

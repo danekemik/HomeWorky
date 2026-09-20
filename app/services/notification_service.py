@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
+from html import escape
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,8 +52,8 @@ class NotificationService:
             "",
         ]
         for item in items:
-            lines.append(f"📚 {item.subject}")
-            lines.append(item.title)
+            lines.append(f"📚 {escape(item.subject, quote=False)}")
+            lines.append(escape(item.title, quote=False))
             lines.append("")
         lines.append(f"📊 Всего заданий: {len(items)}")
         return "\n".join(lines).rstrip()

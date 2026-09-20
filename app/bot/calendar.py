@@ -69,7 +69,3 @@ def build_calendar_markup(cursor: date, today: date | None = None) -> InlineKeyb
 
 def russian_month_name(month: int) -> str:
     return _MONTHS_GENITIVE[month - 1]
-
-
-def build_deadline_keyboard(cursor: date, today: date | None = None) -> InlineKeyboardMarkup:
-    return build_calendar_markup(cursor, today)

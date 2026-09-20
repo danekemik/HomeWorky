@@ -37,7 +37,7 @@ def create_dispatcher(database: Database) -> Dispatcher:
 
 
 async def global_error_handler(
-    event: ErrorEvent, data: dict[str, Any]
+    event: ErrorEvent, data: dict[str, Any] | None = None
 ) -> None:
     logger.error(
         "Unhandled update error",

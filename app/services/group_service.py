@@ -5,7 +5,9 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import AiogramError
 from aiogram.types import (
     Chat,
+    ChatMember,
     ChatMemberAdministrator,
+    ChatMemberOwner,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,30 +48,33 @@ class GroupService:
         await self._groups.remove_membership(group_id, user_id)
 
     async def sync_administrators(self, bot: Bot, group: Group) -> None:
-        """Registers Telegram chat admins with the ADMIN role."""
-        admins = await self._list_administrators(bot, group)
-        for admin in admins:
-            member = await self._users.get_or_create(
-                admin.user.id,
-                username=admin.user.username,
-                first_name=admin.user.first_name,
-                last_name=admin.user.last_name,
+        """Registers Telegram chat admins (incl. creator) with the ADMIN role."""
+        for member in await self._list_administrators(bot, group):
+            if not isinstance(member, (ChatMemberAdministrator, ChatMemberOwner)):
+                continue
+            tg_user = member.user
+            if tg_user.is_bot:
+                continue
+            db_user = await self._users.get_or_create(
+                tg_user.id,
+                username=tg_user.username,
+                first_name=tg_user.first_name,
+                last_name=tg_user.last_name,
             )
             await self._groups.upsert_membership(
-                group.id, member.id, MemberRole.ADMIN
+                group.id, db_user.id, MemberRole.ADMIN
             )
 
     async def _list_administrators(
         self, bot: Bot, group: Group
-    ) -> list[ChatMemberAdministrator]:
+    ) -> list[ChatMember]:
         try:
             result = await bot.get_chat_administrators(group.telegram_chat_id)
-            admins = [
+            return [
                 member
                 for member in result
-                if isinstance(member, ChatMemberAdministrator)
+                if isinstance(member, (ChatMemberAdministrator, ChatMemberOwner))
             ]
-            return admins
         except AiogramError as exc:
             logger.warning(
                 "Failed to load admins for group %s: %s", group.id, exc
