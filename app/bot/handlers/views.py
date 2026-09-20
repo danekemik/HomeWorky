@@ -18,7 +18,7 @@ from app.bot.callbacks import (
     PAGE,
     VIEWS,
 )
-from app.bot.context import resolve_group
+from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import bot_today, build_homework_card, esc, format_homework_label
 from app.bot.handlers.homework import NO_GROUP_TEXT
@@ -365,6 +365,7 @@ async def on_edit_homework(
         )
         return
     await state.set_state(HomeworkEditField.field)
+    select_current_group(user, group.id)
     await state.update_data(homework_id=homework_id, current_group_id=group.id)
     await query.message.edit_text(
         "✏️ Что изменить?",

@@ -16,7 +16,7 @@ from app.bot.callbacks import (
     MENU_BACK,
     SKIP,
 )
-from app.bot.context import resolve_group
+from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import bot_today, build_homework_card
 from app.bot.keyboards.homework import (
@@ -46,7 +46,7 @@ async def on_add_homework(
     await render_subject_picker(query, bot, session, user, state)
 SUBJECT_PENDING = "📚 Выбери предмет:"
 TITLE_PENDING = "✏️ Введи название задания:"
-DESCRIPTION_PENDING = "📝 Добавь описание (или пропусти):"
+DESCRIPTION_PENDING = "📝 Добавь описание:"
 DEADLINE_PENDING = "📅 Укажи дату сдачи:"
 ATTACH_PENDING = (
     "📎 Прикрепи файл, фото или ссылку (можно несколько). "
@@ -69,6 +69,7 @@ async def render_subject_picker(
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
         return
+    select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
     await state.set_state(HomeworkCreation.subject)
     subjects = await HomeworkService(session).list_subjects(group.id)
@@ -160,6 +161,7 @@ async def on_subject_pick(
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
         return
+    select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
     service = HomeworkService(session)
 
@@ -238,6 +240,7 @@ async def on_new_subject(
         text=name, group_id=group.id, session=session
     )
     subject = await service.get_subject(subject_id)
+    select_current_group(user, group.id)
     await state.update_data(
         current_group_id=group.id,
         subject_id=subject_id,
@@ -298,12 +301,7 @@ async def on_calendar(
         await query.answer()
         return
     if payload.startswith("nav:"):
-        try:
-            year_raw, month_raw = payload[4:].split("-")
-            cursor = date(int(year_raw), int(month_raw), 1)
-        except ValueError:
-            await query.answer()
-            return
+        cursor = date.fromisoformat(payload[4:])
         await render_calendar(query, cursor)
         return
     if not payload.startswith("day:"):

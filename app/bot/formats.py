@@ -37,8 +37,6 @@ def build_homework_card(
     if description:
         lines += ["", f"📝 {esc(description)}"]
     lines += ["", f"📅 Дедлайн: {format_date_russian(deadline)}"]
-    if author_name:
-        lines.append(f"👤 Добавил: {esc(author_name)}")
     attachments = attachment_lines or []
     if attachments:
         lines += ["", "📎 Файлы:"]
@@ -47,6 +45,8 @@ def build_homework_card(
     if links:
         lines += ["", "🔗 Ссылки:"]
         lines += [f"  • {esc(line)}" for line in links]
+    if author_name:
+        lines += ["", f"👤 Добавил: {esc(author_name)}"]
     if footer_note:
         lines += ["", esc(footer_note)]
     return "\n".join(lines)

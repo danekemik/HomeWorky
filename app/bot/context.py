@@ -11,6 +11,11 @@ from app.services.group_service import GroupService
 _GROUP_CHAT_TYPES = frozenset({ChatType.GROUP, ChatType.SUPERGROUP})
 
 
+def select_current_group(user: User, group_id: int) -> None:
+    """Запоминает выбранную группу в БД, чтобы выбор переживал рестарты бота."""
+    user.selected_group_id = group_id
+
+
 async def resolve_group(
     bot: Bot,
     session: AsyncSession,
@@ -26,7 +31,7 @@ async def resolve_group(
         return None
 
     data = await state.get_data()
-    group_id = data.get("current_group_id")
+    group_id = data.get("current_group_id") or user.selected_group_id
     if group_id is None:
         return None
     stored_group = await GroupRepository(session).get(group_id)

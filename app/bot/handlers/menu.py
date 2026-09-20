@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.context import select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.filters.chat_type import ChatTypeFilter
 from app.bot.formats import esc
@@ -66,6 +67,7 @@ async def build_menu_payload(
     if not groups:
         return WELCOME_NO_GROUP, onboarding_keyboard()
     if len(groups) == 1:
+        select_current_group(user, groups[0].id)
         await state.update_data(current_group_id=groups[0].id)
         return _menu_text(groups[0]), main_menu_keyboard()
     return PICK_GROUP_TEXT, group_picker_keyboard(groups)
@@ -112,6 +114,7 @@ async def on_pick_group(
         )
         await query.answer("Доступ к этой группе запрещён.", show_alert=True)
         return
+    select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
     await message.edit_text(
         _menu_text(group), reply_markup=main_menu_keyboard()
@@ -148,6 +151,7 @@ async def on_create_group_name(
         return
 
     await state.clear()
+    select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
     human_code = format_code(group.invite_code)
     await message.answer(
@@ -221,6 +225,7 @@ async def on_join_code(
         await message.answer(error)
         return
     await state.clear()
+    select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
     text, markup = await build_menu_payload(session=session, user=user, state=state)
     await message.answer(f"✅ Ты в группе «{esc(group.name)}»!")
