@@ -1,114 +1,133 @@
-import logging
+import secrets
+from datetime import UTC, datetime, timedelta
 
-from aiogram import Bot
-from aiogram.enums import ChatMemberStatus
-from aiogram.exceptions import AiogramError
-from aiogram.types import (
-    Chat,
-    ChatMember,
-    ChatMemberAdministrator,
-    ChatMemberOwner,
-)
+from aiogram.enums import ChatType
+from aiogram.types import Chat
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Group, MemberRole, User
-from app.database.repositories import GroupRepository, UserRepository
+from app.config import settings
+from app.database.models import Group, GroupMember, MemberRole, User
+from app.database.repositories import GroupRepository
 
-logger = logging.getLogger(__name__)
+_GROUP_CHAT_TYPES = frozenset({ChatType.GROUP, ChatType.SUPERGROUP})
 
-_VERIFIED_STATUSES = frozenset(
-    {
-        ChatMemberStatus.MEMBER,
-        ChatMemberStatus.ADMINISTRATOR,
-        ChatMemberStatus.CREATOR,
-        ChatMemberStatus.RESTRICTED,
-    }
-)
+_LETTERS = "ABCDEFGHJKMNPQRSTUVWXYZ"
+_DIGITS = "23456789"
+
+
+class GroupError(Exception):
+    """Ошибка бизнес-логики групп (передаётся пользователю дословно)."""
+
+
+def normalize_code(raw: str) -> str:
+    """Приводит введённый код к каноническому виду (10 символов, без разделителей)."""
+    return "".join(ch for ch in raw.upper() if ch.isalnum())
+
+
+def format_code(code: str) -> str:
+    return f"{code[:5]}-{code[5:]}"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _new_expiry() -> datetime:
+    return _utcnow() + timedelta(days=settings.INVITE_CODE_TTL_DAYS)
 
 
 class GroupService:
-    """Business logic: groups, membership and access checks."""
+    """Учебные группы, код-доступ и членства."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._groups = GroupRepository(session)
-        self._users = UserRepository(session)
 
-    async def register_group(self, chat: Chat) -> Group:
-        return await self._groups.get_or_create(chat.id, chat.title)
+    async def create_group(self, *, creator: User, name: str) -> Group:
+        clean = " ".join(name.split()).strip()
+        if not clean:
+            raise GroupError("Название группы не может быть пустым.")
+        if len(clean) > 64:
+            raise GroupError("Название слишком длинное (максимум 64 символа).")
+        if await self._groups.name_exists(clean):
+            raise GroupError("Группа с таким названием уже существует.")
+        group = await self._groups.create(
+            name=clean,
+            created_by=creator.id,
+            invite_code=self._generate_code(),
+            invite_code_expires_at=_new_expiry(),
+        )
+        await self._groups.upsert_membership(
+            group.id, creator.id, MemberRole.ADMIN
+        )
+        return group
 
-    async def register_membership(
-        self,
-        group: Group,
-        user: User,
-        role: MemberRole = MemberRole.MEMBER,
-    ) -> None:
-        await self._groups.upsert_membership(group.id, user.id, role)
+    @staticmethod
+    def _generate_code() -> str:
+        generator = secrets.SystemRandom()
+        chars = [
+            generator.choice(_LETTERS) for _ in range(5)
+        ] + [generator.choice(_DIGITS) for _ in range(5)]
+        generator.shuffle(chars)
+        return "".join(chars)
 
-    async def remove_membership(self, group_id: int, user_id: int) -> None:
-        await self._groups.remove_membership(group_id, user_id)
+    async def join_group(
+        self, *, group: Group, user: User, code: str
+    ) -> str | None:
+        if normalize_code(code) != group.invite_code:
+            return "Неверный код. Проверь его и попробуй ещё раз."
+        if group.invite_code_expires_at < _utcnow():
+            return "Код устарел. Попроси старосту обновить его в настройках."
+        membership = await self._groups.get_membership(group.id, user.id)
+        if membership is not None and membership.role == MemberRole.ADMIN:
+            return "Ты уже администратор этой группы."
+        await self._groups.upsert_membership(group.id, user.id, MemberRole.MEMBER)
+        return None
 
-    async def sync_administrators(self, bot: Bot, group: Group) -> None:
-        """Registers Telegram chat admins (incl. creator) with the ADMIN role."""
-        for member in await self._list_administrators(bot, group):
-            if not isinstance(member, (ChatMemberAdministrator, ChatMemberOwner)):
-                continue
-            tg_user = member.user
-            if tg_user.is_bot:
-                continue
-            db_user = await self._users.get_or_create(
-                tg_user.id,
-                username=tg_user.username,
-                first_name=tg_user.first_name,
-                last_name=tg_user.last_name,
-            )
-            await self._groups.upsert_membership(
-                group.id, db_user.id, MemberRole.ADMIN
-            )
+    async def is_admin(self, group: Group, user: User) -> bool:
+        membership = await self._groups.get_membership(group.id, user.id)
+        return membership is not None and membership.role == MemberRole.ADMIN
 
-    async def _list_administrators(
-        self, bot: Bot, group: Group
-    ) -> list[ChatMember]:
-        try:
-            result = await bot.get_chat_administrators(group.telegram_chat_id)
-            return [
-                member
-                for member in result
-                if isinstance(member, (ChatMemberAdministrator, ChatMemberOwner))
-            ]
-        except AiogramError as exc:
-            logger.warning(
-                "Failed to load admins for group %s: %s", group.id, exc
-            )
-            return []
+    async def has_access(self, group: Group, user: User) -> bool:
+        return (await self._groups.get_membership(group.id, user.id)) is not None
 
-    async def is_member(self, bot: Bot, group: Group, telegram_id: int) -> bool:
-        try:
-            member = await bot.get_chat_member(group.telegram_chat_id, telegram_id)
-        except AiogramError:
-            return False
-        return member.status in _VERIFIED_STATUSES
+    async def list_groups_for_user(self, user: User) -> list[Group]:
+        return await self._groups.list_groups_for_user(user.id)
 
-    async def list_verified_groups(self, bot: Bot, user: User) -> list[Group]:
-        """Groups the user really belongs to; stale memberships are revoked."""
-        groups = await self._groups.list_groups_for_user(user.id)
-        verified: list[Group] = []
-        revoked: list[Group] = []
-        for group in groups:
-            if await self.is_member(bot, group, user.telegram_id):
-                verified.append(group)
-            else:
-                revoked.append(group)
-        for group in revoked:
-            await self._groups.remove_membership(group.id, user.id)
-        return verified
+    async def admin_groups(self, user: User) -> list[Group]:
+        groups = await self.list_groups_for_user(user)
+        return [g for g in groups if await self.is_admin(g, user)]
 
-    async def verify_access(
-        self, bot: Bot, group: Group, telegram_id: int
-    ) -> bool:
-        """Server-side check before granting access to a group in private chat."""
-        allowed = await self.is_member(bot, group, telegram_id)
-        if not allowed:
-            user = await self._users.get_by_telegram_id(telegram_id)
-            if user is not None:
-                await self._groups.remove_membership(group.id, user.id)
-        return allowed
+    async def list_members(self, group: Group) -> list[GroupMember]:
+        return await self._groups.list_members(group.id)
+
+    async def remove_member(self, group: Group, target_user_id: int) -> None:
+        if group.created_by == target_user_id:
+            raise GroupError("Нельзя удалить создателя группы.")
+        await self._groups.remove_membership(group.id, target_user_id)
+
+    async def invite_info(
+        self, group: Group
+    ) -> tuple[str, datetime]:
+        """Возвращает актуальный код; устаревший заменяется на новый."""
+        if group.invite_code_expires_at < _utcnow():
+            await self.rotate_invite_code(group)
+        return group.invite_code, group.invite_code_expires_at
+
+    async def rotate_invite_code(self, group: Group) -> None:
+        await self._groups.set_invite_code(group, self._generate_code(), _new_expiry())
+
+    async def find_by_invite_code(self, code: str) -> Group | None:
+        return await self._groups.get_by_invite_code(normalize_code(code))
+
+    @staticmethod
+    def invite_valid(group: Group) -> bool:
+        return group.invite_code_expires_at >= _utcnow()
+
+    async def bind_chat(self, group: Group, chat: Chat) -> str | None:
+        if chat.type not in _GROUP_CHAT_TYPES:
+            return "Привязывать можно только групповой чат."
+        existing = await self._groups.get_by_telegram_chat_id(chat.id)
+        if existing is not None and existing.id != group.id:
+            return f"Этот чат уже привязан к группе «{existing.name}»."
+        await self._groups.bind_chat(group, chat.id)
+        return None

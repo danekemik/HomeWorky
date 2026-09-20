@@ -4,7 +4,6 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Index,
-    Integer,
     String,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -31,4 +30,3 @@ class Homework(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(String(4000))
     deadline: Mapped[date] = mapped_column(Date, index=True)
-    estimated_minutes: Mapped[int | None] = mapped_column(Integer)

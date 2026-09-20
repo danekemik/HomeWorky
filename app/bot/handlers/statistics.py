@@ -63,7 +63,7 @@ async def _render_stats(
     if group is None:
         return NO_GROUP_TEXT, None
     stats = await HomeworkService(session).stats(group.id, user.id, bot_today())
-    title = group.title or f"Группа #{group.id}"
+    title = group.name
     text = (
         "📊 <b>Статистика</b>\n\n"
         f"Группа: <b>{esc(title)}</b>\n\n"

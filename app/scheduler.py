@@ -44,6 +44,8 @@ async def _send_tomorrow_digests(bot: Bot, database: Database, today: date) -> N
         target = today + timedelta(days=1)
         service = NotificationService(session)
         for group in groups:
+            if group.telegram_chat_id is None:
+                continue
             items = await service.collect_digest(group.id, target)
             text = service.build_digest_text(target, items)
             if not text:

@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.bot.callbacks import MENU_BACK
 from app.database.models import Group
 
 CB_ADD_HOMEWORK = "menu:add_homework"
@@ -10,6 +11,10 @@ CB_STATS = "menu:stats"
 CB_SETTINGS = "menu:settings"
 
 CB_PICK_GROUP_PREFIX = "pick:"
+
+CB_ONBOARD_CREATE = "onb:create"
+CB_ONBOARD_JOIN = "onb:join"
+CB_JOIN_PICK = "join:"
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -23,10 +28,38 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def onboarding_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Создать группу", callback_data=CB_ONBOARD_CREATE)
+    builder.button(text="🔑 Присоединиться к группе", callback_data=CB_ONBOARD_JOIN)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def onboarding_no_join_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Создать группу", callback_data=CB_ONBOARD_CREATE)
+    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for group in groups:
-        label = group.title or f"Группа #{group.id}"
-        builder.button(text=label, callback_data=f"{CB_PICK_GROUP_PREFIX}{group.id}")
+        builder.button(
+            text=f"🎓 {group.name}", callback_data=f"{CB_PICK_GROUP_PREFIX}{group.id}"
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def join_group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for group in groups:
+        builder.button(
+            text=f"🎓 {group.name}", callback_data=f"{CB_JOIN_PICK}{group.id}"
+        )
+    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
     builder.adjust(1)
     return builder.as_markup()

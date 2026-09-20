@@ -18,16 +18,12 @@ async def resolve_group(
     chat: Chat | None,
     state: FSMContext,
 ) -> Group | None:
-    """Определяет группу-контекст: в групповом чате — сам чат,
-    в личке — выбранную ранее группу. Всегда с проверкой членства."""
+    """Определяет выбранную в меню группу для работы в личном чате.
+
+    Групповые чаты не служат контекстом: членство подтверждается
+    инвайт-кодом, а не присутствием в Telegram-группе."""
     if chat is not None and chat.type in _GROUP_CHAT_TYPES:
-        group = await GroupService(session).register_group(chat)
-        if not await GroupService(session).is_member(
-            bot, group, user.telegram_id
-        ):
-            return None
-        await GroupService(session).register_membership(group, user)
-        return group
+        return None
 
     data = await state.get_data()
     group_id = data.get("current_group_id")
@@ -36,8 +32,6 @@ async def resolve_group(
     stored_group = await GroupRepository(session).get(group_id)
     if stored_group is None:
         return None
-    if not await GroupService(session).verify_access(
-        bot, stored_group, user.telegram_id
-    ):
+    if not await GroupService(session).has_access(stored_group, user):
         return None
     return stored_group

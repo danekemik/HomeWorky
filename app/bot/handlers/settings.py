@@ -1,31 +1,280 @@
-from aiogram import Bot, Router
-from aiogram.fsm.context import FSMContext
+from datetime import datetime
+
+from aiogram import Router
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.filters.callback import CallbackDataPrefix
+from app.bot.formats import esc
 from app.bot.keyboards.menu import CB_SETTINGS
-from app.database.models import User
+from app.bot.keyboards.settings import (
+    PAGE_SIZE_MEMBERS,
+    SET_CODE_ROTATE,
+    SET_MANAGE,
+    SET_MANAGE_GROUP,
+    SET_MEMBER_PAGE,
+    SET_MEMBER_REMOVE,
+    SET_MEMBER_REMOVE_CONFIRM,
+    SET_MEMBERS,
+    admin_group_picker_keyboard,
+    management_keyboard,
+    member_remove_confirm_keyboard,
+    members_keyboard,
+    settings_keyboard,
+)
+from app.database.models import Group, User
+from app.database.repositories import GroupRepository
+from app.services.group_service import GroupError, GroupService, format_code
 
 router = Router(name="settings")
 
-SETTINGS_TEXT = (
-    "⚙️ Настройки\n\n"
-    "🚧 Раздел появится на следующем этапе разработки.\n"
-    "Пока здесь можно будет менять время напоминаний и язык бота."
-)
+SETTINGS_TEXT = "⚙️ Настройки\n\nВыбери раздел:"
+
+
+def _user_label(user: User) -> str:
+    if user.first_name:
+        return user.first_name
+    if user.username:
+        return f"@{user.username}"
+    return f"id{user.telegram_id}"
+
+
+def _management_text(
+    group: Group, invite_code: str, expires_at: datetime, member_count: int
+) -> str:
+    chat_status = (
+        "✅ чат привязан"
+        if group.telegram_chat_id is not None
+        else "⚠️ чат не привязан — используй /link КОД в чате группы"
+    )
+    return (
+        f"🎛 <b>Управление группой «{esc(group.name)}»</b>\n\n"
+        f"🔑 Инвайт-код: <code>{format_code(invite_code)}</code>\n"
+        f"⏳ Действует до: {expires_at.strftime('%d.%m.%Y')}\n"
+        f"🔔 Напоминания: {chat_status}\n\n"
+        f"👥 Участников: <b>{member_count}</b>"
+    )
 
 
 @router.callback_query(CallbackDataPrefix(CB_SETTINGS))
 async def on_settings(
     query: CallbackQuery,
-    bot: Bot,
     session: AsyncSession,
     user: User,
-    state: FSMContext,
 ) -> None:
-    if not isinstance(query.message, Message):
+    message = query.message
+    if not isinstance(message, Message):
         await query.answer()
         return
-    await query.message.edit_text(SETTINGS_TEXT)
+    admin_groups = await GroupService(session).admin_groups(user)
+    await message.edit_text(
+        SETTINGS_TEXT,
+        reply_markup=settings_keyboard(has_admin_groups=bool(admin_groups)),
+    )
     await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_MANAGE))
+async def on_manage_pick(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    message = query.message
+    if not isinstance(message, Message):
+        await query.answer()
+        return
+    admin_groups = await GroupService(session).admin_groups(user)
+    if not admin_groups:
+        await query.answer("Ты не староста ни одной группы.", show_alert=True)
+        return
+    await message.edit_text(
+        "Выбери группу для управления:",
+        reply_markup=admin_group_picker_keyboard(admin_groups),
+    )
+    await query.answer()
+
+
+async def render_management(
+    query: CallbackQuery, session: AsyncSession, user: User, group_id: int
+) -> None:
+    message = query.message
+    if not isinstance(message, Message):
+        await query.answer()
+        return
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    code, expires_at = await service.invite_info(group)
+    members = await service.list_members(group)
+    await message.edit_text(
+        _management_text(group, code, expires_at, len(members)),
+        reply_markup=management_keyboard(group.id),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_MANAGE_GROUP))
+async def on_management(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not query.data:
+        await query.answer()
+        return
+    group_id = int(query.data[len(SET_MANAGE_GROUP):])
+    await render_management(query, session, user, group_id)
+
+
+@router.callback_query(CallbackDataPrefix(SET_CODE_ROTATE))
+async def on_code_rotate(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not query.data:
+        await query.answer()
+        return
+    group_id = int(query.data[len(SET_CODE_ROTATE):])
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    await service.rotate_invite_code(group)
+    await render_management(query, session, user, group_id)
+
+
+@router.callback_query(CallbackDataPrefix(SET_MEMBERS))
+async def on_members(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not query.data:
+        await query.answer()
+        return
+    group_id = int(query.data[len(SET_MEMBERS):])
+    await render_members(query, session, user, group_id, offset=0)
+
+
+@router.callback_query(CallbackDataPrefix(SET_MEMBER_PAGE))
+async def on_members_page(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not query.data or query.data.count(":") < 2:
+        await query.answer()
+        return
+    _, group_raw, offset_raw = query.data.split(":")
+    await render_members(query, session, user, int(group_raw), offset=int(offset_raw))
+
+
+async def render_members(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+    group_id: int,
+    offset: int,
+) -> None:
+    message = query.message
+    if not isinstance(message, Message):
+        await query.answer()
+        return
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    members = await service.list_members(group)
+    chunk = members[offset : offset + PAGE_SIZE_MEMBERS]
+    total_pages = max(1, (len(members) + PAGE_SIZE_MEMBERS - 1) // PAGE_SIZE_MEMBERS)
+    labels = [(m.user_id, _user_label(m.user)) for m in chunk]
+    text = (
+        f"👥 <b>Участники «{esc(group.name)}»</b>\n\n"
+        f"Страница {offset // PAGE_SIZE_MEMBERS + 1} из {total_pages}"
+    )
+    await message.edit_text(
+        text,
+        reply_markup=members_keyboard(group.id, labels, offset, len(members)),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_MEMBER_REMOVE))
+async def on_member_remove(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    message = query.message
+    payload = query.data[len(SET_MEMBER_REMOVE):] if query.data else ""
+    group_raw, _, target_raw = payload.partition(":")
+    if not isinstance(message, Message) or not group_raw or not target_raw:
+        await query.answer()
+        return
+    group_id, target_user_id = int(group_raw), int(target_raw)
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    target_label = next(
+        (
+            _user_label(m.user)
+            for m in await service.list_members(group)
+            if m.user_id == target_user_id
+        ),
+        f"id{target_user_id}",
+    )
+    await message.edit_text(
+        f"Удалить участника <b>{esc(target_label)}</b> из группы «{esc(group.name)}»?\n\n"
+        "Его домашние задания останутся в группе.",
+        reply_markup=member_remove_confirm_keyboard(group_id, target_user_id),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_MEMBER_REMOVE_CONFIRM))
+async def on_member_remove_confirm(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    message = query.message
+    payload = query.data[len(SET_MEMBER_REMOVE_CONFIRM):] if query.data else ""
+    group_raw, _, target_raw = payload.partition(":")
+    if not isinstance(message, Message) or not group_raw or not target_raw:
+        await query.answer()
+        return
+    group_id, target_user_id = int(group_raw), int(target_raw)
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    try:
+        await service.remove_member(group, target_user_id)
+    except GroupError as exc:
+        await query.answer(str(exc), show_alert=True)
+        return
+    await render_members(query, session, user, group_id, offset=0)

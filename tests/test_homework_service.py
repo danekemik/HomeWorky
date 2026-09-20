@@ -1,31 +1,29 @@
 from datetime import date, timedelta
 
 import pytest
-from app.database.models import AttachmentType, MemberRole
+from app.database.models import AttachmentType
 from app.database.repositories.group_repository import GroupRepository
 from app.database.repositories.homework_repository import HomeworkRepository
 from app.database.repositories.subject_repository import SubjectRepository
 from app.database.repositories.user_repository import UserRepository
 from app.services import homework_service
+from app.services.group_service import GroupService
 from app.services.homework_service import HomeworkService
 
 
 async def _seed(session) -> tuple:
-    group = await GroupRepository(session).get_or_create(-1000000001, "Группа 1")
+    admin = await UserRepository(session).get_or_create(
+        333, username="admin", first_name="Аня"
+    )
+    group = await GroupService(session).create_group(creator=admin, name="Группа 1")
     owner = await UserRepository(session).get_or_create(
         111, username="owner", first_name="Иван"
     )
     other = await UserRepository(session).get_or_create(
         222, username="other", first_name="Пётр"
     )
-    admin = await UserRepository(session).get_or_create(
-        333, username="admin", first_name="Аня"
-    )
     await GroupRepository(session).upsert_membership(group.id, owner.id)
     await GroupRepository(session).upsert_membership(group.id, other.id)
-    await GroupRepository(session).upsert_membership(
-        group.id, admin.id, MemberRole.ADMIN
-    )
     subject = await SubjectRepository(session).create(group.id, "Математика")
     return group, owner, other, admin, subject
 
@@ -38,7 +36,6 @@ async def _make_hw(session, group, subject, author, deadline: date):
         title="Задачи №1-20",
         deadline=deadline,
         description="Стр 10-14",
-        estimated_minutes=120,
     )
 
 
@@ -114,12 +111,9 @@ async def test_edit_fields_and_set_subject(session) -> None:
     hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
     subject_2 = await SubjectRepository(session).create(group.id, "Физика")
     service = HomeworkService(session)
-    await service.update_homework(
-        hw, title="Новое название", estimated_minutes=60
-    )
+    await service.update_homework(hw, title="Новое название")
     assert hw.title == "Новое название"
     assert hw.description == "Стр 10-14"
-    assert hw.estimated_minutes == 60
     await service.set_subject(hw, subject_2.id)
     assert hw.subject_id == subject_2.id
 
@@ -140,7 +134,9 @@ async def test_stats(session) -> None:
 
 
 async def test_list_all_groups(session) -> None:
-    await GroupRepository(session).get_or_create(-1000000001, "Группа 1")
-    await GroupRepository(session).get_or_create(-1000000002, "Группа 2")
+    user = await UserRepository(session).get_or_create(444, username="u")
+    service = GroupService(session)
+    await service.create_group(creator=user, name="Группа 1")
+    await service.create_group(creator=user, name="Группа 2")
     groups = await GroupRepository(session).list_all()
     assert len(groups) == 2

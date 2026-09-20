@@ -26,7 +26,6 @@ class HomeworkRepository(BaseRepository[Homework]):
         title: str,
         deadline: date,
         description: str | None = None,
-        estimated_minutes: int | None = None,
     ) -> Homework:
         homework = Homework(
             group_id=group_id,
@@ -35,7 +34,6 @@ class HomeworkRepository(BaseRepository[Homework]):
             title=title,
             deadline=deadline,
             description=description,
-            estimated_minutes=estimated_minutes,
         )
         return await self.add(homework)
 

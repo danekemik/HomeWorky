@@ -28,8 +28,17 @@ class Group(TimestampMixin, Base):
     __tablename__ = "groups"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
-    title: Mapped[str | None] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    invite_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    invite_code_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    telegram_chat_id: Mapped[int | None] = mapped_column(
+        BigInteger, unique=True, index=True, nullable=True
+    )
 
 
 class GroupMember(Base):

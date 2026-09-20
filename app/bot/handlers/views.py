@@ -92,7 +92,6 @@ def _detail_payload(
         title=homework.title,
         deadline=homework.deadline,
         description=homework.description,
-        estimated_minutes=homework.estimated_minutes,
         author_name=detail.author_name,
         attachment_lines=[
             item.file_name
@@ -400,10 +399,6 @@ async def on_edit_field(
             "📝 Введи новое описание (или «⏭ Пропустить», чтобы очистить):",
             HomeworkEditField.description,
         ),
-        "estimate": (
-            "⏱ Введи новую оценку в минутах (или «⏭ Пропустить»):",
-            HomeworkEditField.estimate,
-        ),
         "deadline": ("📅 Выбери новую дату сдачи:", HomeworkEditField.deadline),
         "attachment": ("📎 Добавь новые файлы или ссылки:", HomeworkEditField.attachment),
     }
@@ -439,7 +434,7 @@ async def _apply_text_field(
     user: User,
     state: FSMContext,
     field: str,
-    value: str | int | None,
+    value: str | None,
 ) -> None:
     data = await state.get_data()
     homework_id = data.get("homework_id")
@@ -460,9 +455,6 @@ async def _apply_text_field(
         await service.update_homework(
             homework, description=str(value) if value is not None else None
         )
-    else:
-        assert isinstance(value, int)
-        await service.update_homework(homework, estimated_minutes=value)
     await state.clear()
     detail = await service.get_detail(homework)
     text, markup = _detail_payload(homework, detail, True)
@@ -505,26 +497,6 @@ async def on_edit_description(
     )
 
 
-@router.message(StateFilter(HomeworkEditField.estimate))
-async def on_edit_estimate_message(
-    message: Message,
-    bot: Bot,
-    session: AsyncSession,
-    user: User,
-    state: FSMContext,
-) -> None:
-    raw = (message.text or "").strip()
-    try:
-        minutes = int(raw)
-    except ValueError:
-        await message.answer("Напиши число минут, например <b>120</b>.")
-        return
-    if minutes <= 0 or minutes > 10080:
-        await message.answer("Значение должно быть от 1 до 10080 минут.")
-        return
-    await _apply_text_field(message, bot, session, user, state, "estimate", minutes)
-
-
 async def _finish_edit(
     message: Message,
     service: HomeworkService,
@@ -542,7 +514,7 @@ async def apply_edit_field(
     user: User,
     state: FSMContext,
 ) -> None:
-    """Применение поля из callback-контекста (пропуск описания/оценки)."""
+    """Применение поля из callback-контекста (пропуск описания)."""
     if not isinstance(query.message, Message):
         await state.clear()
         await query.answer()
@@ -563,8 +535,6 @@ async def apply_edit_field(
     state_name = await state.get_state()
     if state_name == HomeworkEditField.description.state:
         homework.description = None
-    elif state_name == HomeworkEditField.estimate.state:
-        homework.estimated_minutes = None
     await session.flush()
     await state.clear()
     await _finish_edit(query.message, service, homework)

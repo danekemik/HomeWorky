@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     TIMEZONE: str = "Europe/Moscow"
     REMINDER_TIME: str = "20:00"
     DEADLINE_MORNING_TIME: str = "09:00"
+    INVITE_CODE_TTL_DAYS: int = 3
     LOG_LEVEL: str = "INFO"
 
     @property

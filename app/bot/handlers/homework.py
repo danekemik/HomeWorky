@@ -32,9 +32,7 @@ from app.services.homework_service import HomeworkService
 
 router = Router(name="homework")
 
-NO_GROUP_TEXT = (
-    "Сначала выбери свою группу в меню (/menu) или напиши что-нибудь в её чате."
-)
+NO_GROUP_TEXT = "Сначала выбери свою группу в меню (/menu)."
 
 
 @router.callback_query(CallbackDataPrefix(CB_ADD_HOMEWORK))
@@ -49,10 +47,6 @@ async def on_add_homework(
 SUBJECT_PENDING = "📚 Выбери предмет (или создай новый):"
 TITLE_PENDING = "✏️ Введи название задания:"
 DESCRIPTION_PENDING = "📝 Добавь описание (или «⏭ Пропустить»):"
-ESTIMATE_PENDING = (
-    "⏱ Сколько времени займёт выполнение?\n"
-    "Напиши число минут (например, <b>120</b>) или «⏭ Пропустить»."
-)
 DEADLINE_PENDING = "📅 Укажи дату сдачи:"
 ATTACH_PENDING = (
     "📎 Прикрепи файл, фото или ссылку (можно несколько). "
@@ -78,7 +72,7 @@ async def render_subject_picker(
     await state.update_data(current_group_id=group.id)
     await state.set_state(HomeworkCreation.subject)
     subjects = await HomeworkService(session).list_subjects(group.id)
-    title = group.title or f"Группа #{group.id}"
+    title = group.name
     text = SUBJECT_PENDING + f"\n\nГруппа: <b>{esc(title)}</b>"
     await message.edit_text(text, reply_markup=subject_picker_keyboard(subjects))
     await query.answer()
@@ -103,13 +97,11 @@ def _pending_preview_card(data: dict) -> str:
         str(link.get("title") or link["url"])
         for link in data.get("links", [])  # type: ignore[arg-type]
     ]
-    estimate = data.get("estimated_minutes")
     return build_homework_card(
         subject=subject,
         title=str(data["title"]),
         deadline=deadline,
         description=data.get("description") and str(data["description"]),
-        estimated_minutes=estimate if isinstance(estimate, int) else None,
         attachment_lines=attachment_lines,
         link_lines=link_lines,
         footer_note="Сохранить задание?",
@@ -208,7 +200,7 @@ async def on_subject_pick(
         subject_name=subject.name if subject is not None else None,
     )
     await state.set_state(HomeworkCreation.title)
-    text = TITLE_PENDING + f"\n\nГруппа: <b>{esc(group.title or '')}</b>"
+    text = TITLE_PENDING + f"\n\nГруппа: <b>{esc(group.name)}</b>"
     await message.edit_text(text)
     await query.answer()
 
@@ -293,22 +285,6 @@ async def on_title(message: Message, state: FSMContext) -> None:
 @router.message(StateFilter(HomeworkCreation.description))
 async def on_description(message: Message, state: FSMContext) -> None:
     await state.update_data(description=(message.text or "").strip() or None)
-    await state.set_state(HomeworkCreation.estimate)
-    await message.answer(ESTIMATE_PENDING, reply_markup=skip_or_cancel_keyboard())
-
-
-@router.message(StateFilter(HomeworkCreation.estimate))
-async def on_estimate(message: Message, state: FSMContext) -> None:
-    raw = (message.text or "").strip()
-    try:
-        minutes = int(raw)
-    except ValueError:
-        await message.answer("Напиши число минут, например <b>120</b>.")
-        return
-    if minutes <= 0 or minutes > 10080:
-        await message.answer("Значение должно быть от 1 до 10080 минут.")
-        return
-    await state.update_data(estimated_minutes=minutes)
     await state.set_state(HomeworkCreation.deadline)
     await message.answer(DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today()))
 
@@ -437,9 +413,6 @@ async def _finalize_creation(
         title=title,
         deadline=deadline,
         description=data.get("description") and str(data["description"]),
-        estimated_minutes=(
-            data["estimated_minutes"] if isinstance(data.get("estimated_minutes"), int) else None
-        ),
     )
     await service.attach_pending(
         homework,
@@ -453,7 +426,6 @@ async def _finalize_creation(
         title=homework.title,
         deadline=homework.deadline,
         description=homework.description,
-        estimated_minutes=homework.estimated_minutes,
         author_name=detail.author_name,
         attachment_lines=[
             (
@@ -529,14 +501,6 @@ async def on_skip(
     state_name = await state.get_state()
     if state_name == HomeworkCreation.description.state:
         await state.update_data(description=None)
-        await state.set_state(HomeworkCreation.estimate)
-        await query.message.edit_text(
-            ESTIMATE_PENDING, reply_markup=skip_or_cancel_keyboard()
-        )
-        await query.answer()
-        return
-    if state_name == HomeworkCreation.estimate.state:
-        await state.update_data(estimated_minutes=None)
         await state.set_state(HomeworkCreation.deadline)
         await query.message.edit_text(
             DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
@@ -544,13 +508,6 @@ async def on_skip(
         await query.answer()
         return
     if state_name == HomeworkEditField.description.state:
-        from app.bot.handlers.views import apply_edit_field
-
-        await apply_edit_field(
-            query=query, bot=bot, session=session, user=user, state=state
-        )
-        return
-    if state_name == HomeworkEditField.estimate.state:
         from app.bot.handlers.views import apply_edit_field
 
         await apply_edit_field(
@@ -575,7 +532,7 @@ async def on_flow_cancel(
     from app.bot.handlers.menu import build_menu_payload
 
     text, markup = await build_menu_payload(
-        bot=bot, session=session, user=user, state=state
+        session=session, user=user, state=state
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
@@ -618,7 +575,7 @@ async def on_back_to_menu(
     from app.bot.handlers.menu import build_menu_payload
 
     text, markup = await build_menu_payload(
-        bot=bot, session=session, user=user, state=state
+        session=session, user=user, state=state
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()

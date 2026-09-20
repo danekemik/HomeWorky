@@ -60,11 +60,10 @@ def homework_edit_field_keyboard(homework_id: int | None = None) -> InlineKeyboa
     builder.button(text="📚 Предмет", callback_data=f"{HW_EDIT_FIELD}subject")
     builder.button(text="💻 Название", callback_data=f"{HW_EDIT_FIELD}title")
     builder.button(text="📝 Описание", callback_data=f"{HW_EDIT_FIELD}description")
-    builder.button(text="⏱ Оценка времени", callback_data=f"{HW_EDIT_FIELD}estimate")
     builder.button(text="📅 Дата сдачи", callback_data=f"{HW_EDIT_FIELD}deadline")
     builder.button(text="📎 Файлы и ссылки", callback_data=f"{HW_EDIT_FIELD}attachment")
     builder.button(text="🔙 В меню", callback_data=MENU_BACK)
-    builder.adjust(2, 2, 2, 1)
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 

@@ -5,14 +5,21 @@ from app.database.repositories.group_repository import GroupRepository
 from app.database.repositories.homework_repository import HomeworkRepository
 from app.database.repositories.subject_repository import SubjectRepository
 from app.database.repositories.user_repository import UserRepository
+from app.services.group_service import GroupService
 from app.services.notification_service import NotificationService
 
 
 async def _seed(session) -> tuple[Group, User]:
-    group = await GroupRepository(session).get_or_create(-1000000003, "Программисты")
+    group = await GroupService(session).create_group(
+        creator=await UserRepository(session).get_or_create(
+            999, username="creator", first_name="Староста"
+        ),
+        name="Программисты",
+    )
     user = await UserRepository(session).get_or_create(
         333, username="student", first_name="Даня"
     )
+    await GroupRepository(session).upsert_membership(group.id, user.id)
     subject = await SubjectRepository(session).create(group.id, "Программирование")
     repo = HomeworkRepository(session)
     await repo.create(

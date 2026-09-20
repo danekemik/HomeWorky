@@ -63,7 +63,6 @@ class HomeworkService:
         title: str,
         deadline: date,
         description: str | None = None,
-        estimated_minutes: int | None = None,
     ) -> Homework:
         return await self._repo.create(
             group_id=group_id,
@@ -72,7 +71,6 @@ class HomeworkService:
             title=title,
             deadline=deadline,
             description=description,
-            estimated_minutes=estimated_minutes,
         )
 
     async def get_for_group(self, homework_id: int, group_id: int) -> Homework | None:
@@ -85,7 +83,6 @@ class HomeworkService:
         title: str | None = None,
         description: str | None = None,
         deadline: date | None = None,
-        estimated_minutes: int | None = None,
     ) -> Homework:
         if title is not None:
             homework.title = title
@@ -93,8 +90,6 @@ class HomeworkService:
             homework.description = description
         if deadline is not None:
             homework.deadline = deadline
-        if estimated_minutes is not None:
-            homework.estimated_minutes = estimated_minutes
         await self._session.flush()
         return homework
 

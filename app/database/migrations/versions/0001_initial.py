@@ -2,7 +2,7 @@
 
 Revision ID: 0001_initial
 Revises:
-Create Date: 2026-09-19
+Create Date: 2026-09-20
 
 """
 from collections.abc import Sequence
@@ -48,13 +48,25 @@ def upgrade() -> None:
     op.create_table(
         "groups",
         sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("name", sa.String(128), nullable=False, unique=True),
+        sa.Column(
+            "created_by",
+            sa.Integer(),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column("invite_code", sa.String(16), nullable=False),
+        sa.Column(
+            "invite_code_expires_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+        ),
         sa.Column(
             "telegram_chat_id",
             sa.BigInteger(),
-            nullable=False,
+            nullable=True,
             unique=True,
         ),
-        sa.Column("title", sa.String(255), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

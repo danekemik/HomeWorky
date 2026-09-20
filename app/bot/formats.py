@@ -14,14 +14,6 @@ def bot_today() -> date:
     return datetime.now(settings.tz).date()
 
 
-def format_minutes(minutes: int) -> str:
-    if minutes >= 60 and minutes % 60 == 0:
-        return f"~{minutes // 60} час(а)"
-    if minutes >= 60:
-        return f"~{minutes // 60} ч {minutes % 60} мин"
-    return f"~{minutes} мин"
-
-
 def format_date_russian(deadline: date) -> str:
     return f"{deadline.day} {russian_month_name(deadline.month)}"
 
@@ -36,7 +28,6 @@ def build_homework_card(
     title: str,
     deadline: date,
     description: str | None = None,
-    estimated_minutes: int | None = None,
     author_name: str | None = None,
     attachment_lines: list[str] | None = None,
     link_lines: list[str] | None = None,
@@ -46,8 +37,6 @@ def build_homework_card(
     if description:
         lines += ["", f"📝 {esc(description)}"]
     lines += ["", f"📅 Дедлайн: {format_date_russian(deadline)}"]
-    if estimated_minutes is not None:
-        lines.append(f"⏱ Оценка: {format_minutes(estimated_minutes)}")
     if author_name:
         lines.append(f"👤 Добавил: {esc(author_name)}")
     attachments = attachment_lines or []

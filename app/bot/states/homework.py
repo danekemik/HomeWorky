@@ -6,7 +6,6 @@ class HomeworkCreation(StatesGroup):
     new_subject = State()
     title = State()
     description = State()
-    estimate = State()
     deadline = State()
     attachment = State()
 
@@ -16,6 +15,5 @@ class HomeworkEditField(StatesGroup):
     new_subject = State()
     title = State()
     description = State()
-    estimate = State()
     deadline = State()
     attachment = State()
