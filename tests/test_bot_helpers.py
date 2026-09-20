@@ -45,7 +45,9 @@ def test_collect_attachment_photo_uses_largest() -> None:
 
 
 def test_calendar_day_callback_format() -> None:
-    markup = build_calendar_markup(date(2026, 9, 20))
+    markup = build_calendar_markup(
+        date(2026, 9, 20), today=date(2026, 9, 18)
+    )
     buttons = [
         cell.callback_data
         for row in markup.inline_keyboard

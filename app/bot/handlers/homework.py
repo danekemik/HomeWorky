@@ -363,7 +363,12 @@ async def on_calendar(
         await query.answer()
         return
     if payload.startswith("nav:"):
-        cursor = date.fromisoformat(payload[4:])
+        try:
+            year, month = map(int, payload[4:].split("-"))
+            cursor = date(year, month, 1)
+        except ValueError:
+            await query.answer()
+            return
         await render_calendar(query, cursor)
         return
     if not payload.startswith("day:"):
