@@ -84,6 +84,6 @@ def member_remove_confirm_keyboard(group_id: int, user_id: int) -> InlineKeyboar
         text="✅ Да, удалить",
         callback_data=f"{SET_MEMBER_REMOVE_CONFIRM}{group_id}:{user_id}",
     )
-    builder.button(text="❌ Отмена", callback_data=f"{SET_MEMBERS}{group_id}")
+    builder.button(text="🔙 Назад", callback_data=f"{SET_MEMBERS}{group_id}")
     builder.adjust(2)
     return builder.as_markup()

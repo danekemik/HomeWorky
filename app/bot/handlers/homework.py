@@ -44,9 +44,9 @@ async def on_add_homework(
     state: FSMContext,
 ) -> None:
     await render_subject_picker(query, bot, session, user, state)
-SUBJECT_PENDING = "📚 Выбери предмет (или создай новый):"
+SUBJECT_PENDING = "📚 Выбери предмет:"
 TITLE_PENDING = "✏️ Введи название задания:"
-DESCRIPTION_PENDING = "📝 Добавь описание (или «⏭ Пропустить»):"
+DESCRIPTION_PENDING = "📝 Добавь описание (или пропусти):"
 DEADLINE_PENDING = "📅 Укажи дату сдачи:"
 ATTACH_PENDING = (
     "📎 Прикрепи файл, фото или ссылку (можно несколько). "
@@ -298,7 +298,12 @@ async def on_calendar(
         await query.answer()
         return
     if payload.startswith("nav:"):
-        cursor = date.fromisoformat(payload[4:])
+        try:
+            year_raw, month_raw = payload[4:].split("-")
+            cursor = date(int(year_raw), int(month_raw), 1)
+        except ValueError:
+            await query.answer()
+            return
         await render_calendar(query, cursor)
         return
     if not payload.startswith("day:"):

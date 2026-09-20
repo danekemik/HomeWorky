@@ -14,7 +14,7 @@ from app.database.models import Subject
 
 
 def cancel_button() -> InlineKeyboardButton:
-    return InlineKeyboardButton(text="❌ Отмена", callback_data=FLOW_CANCEL)
+    return InlineKeyboardButton(text="🔙 Назад", callback_data=FLOW_CANCEL)
 
 
 def subject_picker_keyboard(subjects: list[Subject]) -> InlineKeyboardMarkup:
@@ -33,7 +33,7 @@ def subject_picker_keyboard(subjects: list[Subject]) -> InlineKeyboardMarkup:
 def skip_or_cancel_keyboard(readable: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if readable:
-        builder.button(text="⏭ Пропустить", callback_data=SKIP)
+        builder.button(text="➡️ Пропустить", callback_data=SKIP)
     builder.row(cancel_button())
     return builder.as_markup()
 
@@ -41,7 +41,7 @@ def skip_or_cancel_keyboard(readable: bool = True) -> InlineKeyboardMarkup:
 def attachment_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Готово", callback_data=ATTACH_DONE)
-    builder.button(text="⏭ Пропустить", callback_data=ATTACH_SKIP)
+    builder.button(text="➡️ Пропустить", callback_data=ATTACH_SKIP)
     builder.row(cancel_button())
     return builder.as_markup()
 
