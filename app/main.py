@@ -1,6 +1,9 @@
 import asyncio
 import logging
 
+from aiogram import Bot
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
+
 from app.bot.main import create_bot, create_dispatcher
 from app.config import settings
 from app.database.session import Database
@@ -14,10 +17,22 @@ def configure_logging() -> None:
     )
 
 
+async def _register_commands(bot: Bot) -> None:
+    await bot.set_my_commands(
+        [
+            BotCommand(command="menu", description="🏠 Открыть меню"),
+            BotCommand(command="start", description="🚀 Перезапустить бота"),
+            BotCommand(command="help", description="❓ Помощь"),
+        ],
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+
+
 async def main() -> None:
     configure_logging()
     database = Database(settings.DATABASE_URL)
     bot = create_bot(settings.BOT_TOKEN)
+    await _register_commands(bot)
     dispatcher = create_dispatcher(database)
     reminder_task = asyncio.create_task(
         run_reminder_loop(bot, database, settings)
