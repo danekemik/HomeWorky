@@ -228,11 +228,11 @@ async def on_nearest_deadlines(
         if not items:
             lines.append(EMPTY_LINE)
             return
-        for index, item in enumerate(items):
-            if index:
+        for index, item in enumerate(items, start=1):
+            if index > 1:
                 lines.append("")
             subject = subject_names.get(item.subject_id, "—")
-            lines.extend([esc(subject), esc(item.title)])
+            lines.extend([f"{index}. {esc(subject)}", esc(item.title)])
             builder.button(
                 text=f"{subject} — {item.title}",
                 callback_data=f"{HW_DETAIL}{item.id}",
