@@ -58,7 +58,7 @@ _MONTHS_RU = (
 )
 
 _CATEGORY_TITLES = {
-    "past": "📜 Прошедшие задания (2 недели)",
+    "past": "📜 Прошедшие задания (за неделю)",
     "active": "🔥 Актуальные задания",
     "mine": "👤 Созданные мной",
 }
@@ -270,7 +270,10 @@ async def on_all_tasks(
         await query.answer(NO_GROUP_TEXT, show_alert=True)
         return
     await query.message.edit_text(
-        "🗂 Все задания\n\nВыбери категорию:",
+        "🐹 *Homy достает стопку тетрадей*\n"
+        "Посмотрим, что тут у нас...\n"
+        "\n"
+        "Выбери категорию:",
         reply_markup=homeworks_category_keyboard(),
     )
     await query.answer()

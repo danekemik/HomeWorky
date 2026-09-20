@@ -126,7 +126,7 @@ class HomeworkService:
         return await self._repo.list_from_date(group_id, today)
 
     async def list_past(self, group_id: int, today: date) -> list[Homework]:
-        start = today - timedelta(days=14)
+        start = today - timedelta(days=7)
         return await self._repo.list_from_date(group_id, start, today - timedelta(days=1))
 
     async def list_created_by(self, group_id: int, author_id: int) -> list[Homework]:

@@ -24,6 +24,7 @@ async def run_reminder_loop(bot: Bot, database: Database, cfg: Settings) -> None
             await _sleep_until(target_time, cfg.tz)
 
         await _send_tomorrow_digests(bot, database, now.date())
+        await _cleanup_expired_homeworks(database, now.date())
 
         next_day = now.date() + timedelta(days=1)
         next_target = datetime.combine(
@@ -59,3 +60,15 @@ async def _send_tomorrow_digests(bot: Bot, database: Database, today: date) -> N
                     group.id,
                     exc,
                 )
+
+
+async def _cleanup_expired_homeworks(database: Database, today: date) -> None:
+    """Удаляет задания, после дедлайна которых прошла неделя."""
+    from app.database.repositories.homework_repository import HomeworkRepository
+
+    cut_off = today - timedelta(days=7)
+    async with database.session_factory() as session:
+        deleted = await HomeworkRepository(session).delete_expired(cut_off)
+        await session.commit()
+        if deleted:
+            logger.info("Удалено просроченных заданий: %s", deleted)

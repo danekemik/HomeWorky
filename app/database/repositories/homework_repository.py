@@ -102,6 +102,22 @@ class HomeworkRepository(BaseRepository[Homework]):
         )
         return int((await self._session.scalar(stmt)) or 0)
 
+    async def delete_expired(self, before: date) -> int:
+        ids_stmt = select(Homework.id).where(Homework.deadline < before)
+        ids = list((await self._session.scalars(ids_stmt)).all())
+        if not ids:
+            return 0
+        await self._session.execute(
+            delete(Attachment).where(Attachment.homework_id.in_(ids))
+        )
+        await self._session.execute(
+            delete(HomeworkLink).where(HomeworkLink.homework_id.in_(ids))
+        )
+        await self._session.execute(
+            delete(Homework).where(Homework.id.in_(ids))
+        )
+        return len(ids)
+
     async def subject_names_grouped(
         self, group_id: int, homeworks: list[Homework]
     ) -> dict[int, str]:
