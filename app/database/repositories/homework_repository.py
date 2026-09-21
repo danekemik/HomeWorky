@@ -44,6 +44,16 @@ class HomeworkRepository(BaseRepository[Homework]):
         )
         return await self._session.scalar(stmt)
 
+    async def find_by_subject_and_deadline(
+        self, group_id: int, subject_id: int, deadline: date
+    ) -> Homework | None:
+        stmt = select(Homework).where(
+            Homework.group_id == group_id,
+            Homework.subject_id == subject_id,
+            Homework.deadline == deadline,
+        )
+        return await self._session.scalar(stmt)
+
     async def list_for_group(self, group_id: int) -> list[Homework]:
         stmt = (
             select(Homework)
@@ -142,9 +152,11 @@ class HomeworkRepository(BaseRepository[Homework]):
         telegram_file_id: str,
         file_type: AttachmentType,
         file_name: str | None = None,
+        author_id: int | None = None,
     ) -> Attachment:
         attachment = Attachment(
             homework_id=homework_id,
+            author_id=author_id,
             telegram_file_id=telegram_file_id,
             file_type=file_type,
             file_name=file_name,
@@ -152,6 +164,16 @@ class HomeworkRepository(BaseRepository[Homework]):
         self._session.add(attachment)
         await self._session.flush()
         return attachment
+
+    async def delete_attachment(self, attachment_id: int) -> None:
+        stmt = delete(Attachment).where(Attachment.id == attachment_id)
+        await self._session.execute(stmt)
+
+    async def count_attachments(self, homework_id: int) -> int:
+        stmt = select(func.count(Attachment.id)).where(
+            Attachment.homework_id == homework_id
+        )
+        return int((await self._session.scalar(stmt)) or 0)
 
     async def add_link(
         self, homework_id: int, *, url: str, title: str | None = None

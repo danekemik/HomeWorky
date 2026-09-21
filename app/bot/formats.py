@@ -30,6 +30,7 @@ def build_homework_card(
     description: str | None = None,
     author_name: str | None = None,
     attachment_lines: list[str] | None = None,
+    attachment_limit: int | None = None,
     link_lines: list[str] | None = None,
     footer_note: str | None = None,
 ) -> str:
@@ -39,7 +40,10 @@ def build_homework_card(
     lines += ["", f"📅 Дедлайн: {format_date_russian(deadline)}"]
     attachments = attachment_lines or []
     if attachments:
-        lines += ["", "📎 Файлы:"]
+        header = "📎 Файлы"
+        if attachment_limit is not None:
+            header = f"{header} ({len(attachments)}/{attachment_limit})"
+        lines += ["", f"{header}:"]
         lines += [f"  • {esc(line)}" for line in attachments]
     links = link_lines or []
     if links:

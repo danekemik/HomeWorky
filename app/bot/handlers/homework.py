@@ -43,7 +43,12 @@ from app.bot.states.group_flow import GroupFlow, SettingsFlow
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
 from app.services.group_service import GroupService
-from app.services.homework_service import HomeworkDetail, HomeworkService
+from app.services.homework_service import (
+    HomeworkDetail,
+    HomeworkExistsError,
+    HomeworkLimitError,
+    HomeworkService,
+)
 
 router = Router(name="homework")
 
@@ -322,7 +327,13 @@ async def on_new_subject(
         detail = await service.get_detail(homework)
         from app.bot.handlers.views import _detail_payload
 
-        text, markup = _detail_payload(homework, detail, True)
+        text, markup = _detail_payload(
+            homework,
+            detail,
+            True,
+            True,
+            {item.id for item in detail.attachments},
+        )
         await message.answer(text, reply_markup=markup)
     elif (await state.get_data()).get("from_fields"):
         await _render_preview_message(message, state, answer=True)
@@ -367,7 +378,11 @@ async def on_description(message: Message, state: FSMContext) -> None:
     CallbackDataPrefix(CALENDAR),
 )
 async def on_calendar(
-    query: CallbackQuery, state: FSMContext
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
 ) -> None:
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
@@ -417,9 +432,56 @@ async def on_calendar(
         await _render_preview_message(query.message, state)
         await query.answer()
         return
+    if not _is_base_edit(state_name):
+        data = await state.get_data()
+        subject_id = data.get("subject_id")
+        homework_id = data.get("homework_id")
+        if subject_id and not homework_id:
+            service = HomeworkService(session)
+            group = await resolve_group(
+                bot, session, user, query.message.chat, state
+            )
+            if group is not None:
+                existing = await service.find_by_subject_and_date(
+                    group.id, int(subject_id), chosen
+                )
+                if existing is not None:
+                    await _render_existing_homework(
+                        query.message, session, user, group.id, existing
+                    )
+                    await state.clear()
+                    await query.answer()
+                    return
     await state.set_state(HomeworkCreation.attachment)
     await query.message.edit_text(ATTACH_PENDING, reply_markup=attachment_keyboard(False))
     await query.answer()
+
+
+async def _render_existing_homework(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    group_id: int,
+    existing: Homework,
+) -> None:
+    service = HomeworkService(session)
+    detail = await service.get_detail(existing)
+    from app.bot.handlers.views import _detail_payload
+
+    can_modify = await service.can_modify(user, group_id, existing)
+    can_add_files = await service.is_member(user, group_id)
+    deleteables = {
+        item.id
+        for item in detail.attachments
+        if item.author_id == user.id
+    }
+    text, markup = _detail_payload(
+        existing, detail, can_modify, can_add_files, deleteables
+    )
+    await message.edit_text(
+        "⚠️ На этот предмет и дату уже есть задание!\n\n" + text,
+        reply_markup=markup,
+    )
 
 
 def _collect_attachment(message: Message) -> dict[str, object] | None:
@@ -479,6 +541,21 @@ async def on_attachment_message(
     if attachment is None:
         await message.answer(
             "Пришли файл 📄, фото 🖼, ссылку 🔗 или нажми «✅ Готово»."
+        )
+        return
+    pending = len(data.get("attachments", []))
+    if data.get("homework_id"):
+        homework = await session.get(Homework, int(data["homework_id"]))
+        if homework is None:
+            await message.answer("Задание не найдено. Нажми «✅ Готово».")
+            return
+        existing = await HomeworkService(session).attachment_count(homework)
+    else:
+        existing = 0
+    if existing + pending >= HomeworkService.MAX_ATTACHMENTS:
+        await message.answer(
+            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание. "
+            "Удалив лишнее, сможешь добавить новое."
         )
         return
     data.setdefault("attachments", []).append(attachment)
@@ -546,19 +623,45 @@ async def _finalize_creation(
         await state.clear()
         return
     deadline = date.fromisoformat(str(deadline_raw))
-    homework = await service.create_homework(
-        group_id=group.id,
-        subject_id=int(data["subject_id"]),
-        author_id=user.id,
-        title=title,
-        deadline=deadline,
-        description=data.get("description") and str(data["description"]),
-    )
-    await service.attach_pending(
-        homework,
-        attachments=list(data.get("attachments", [])),  # type: ignore[arg-type]
-        links=list(data.get("links", [])),  # type: ignore[arg-type]
-    )
+    try:
+        homework = await service.create_homework(
+            group_id=group.id,
+            subject_id=int(data["subject_id"]),
+            author_id=user.id,
+            title=title,
+            deadline=deadline,
+            description=data.get("description") and str(data["description"]),
+        )
+    except HomeworkExistsError:
+        existing = await service.find_by_subject_and_date(
+            group.id, int(data["subject_id"]), deadline
+        )
+        await state.clear()
+        if existing is None:
+            await query.answer(
+                "Задание не создано. Попробуй ещё раз.", show_alert=True
+            )
+            return
+        await _render_existing_homework(
+            query.message, session, user, group.id, existing
+        )
+        await query.answer("Задание не создано — оно уже есть.")
+        return
+    try:
+        await service.attach_pending(
+            homework,
+            attachments=list(data.get("attachments", [])),  # type: ignore[arg-type]
+            links=list(data.get("links", [])),  # type: ignore[arg-type]
+            author_id=user.id,
+        )
+    except HomeworkLimitError:
+        await service.delete_homework(homework)
+        await state.clear()
+        await query.answer(
+            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание.",
+            show_alert=True,
+        )
+        return
     await state.clear()
     detail = await service.get_detail(homework)
     text = _created_confirmation_card(detail, homework)
@@ -776,6 +879,25 @@ async def on_flow_cancel(
             await _back_to_menu(message, bot, session, user, state)
             await query.answer()
             return
+        if data.get("add_only"):
+            from app.bot.handlers.views import _open_detail
+
+            service = HomeworkService(session)
+            group = await resolve_group(
+                bot, session, user, query.message.chat, state
+            )
+            homework = (
+                await service.get_for_group(int(homework_id), group.id)
+                if group is not None
+                else None
+            )
+            if homework is not None:
+                await state.clear()
+                await _open_detail(
+                    message, bot, session, user, service, homework
+                )
+                await query.answer()
+                return
         await state.set_state(HomeworkEditField.field)
         await message.edit_text(
             "✏️ Что изменить?",

@@ -5,6 +5,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +16,10 @@ class Homework(TimestampMixin, Base):
     __tablename__ = "homeworks"
     __table_args__ = (
         Index("ix_homeworks_group_deadline", "group_id", "deadline"),
+        UniqueConstraint(
+            "group_id", "subject_id", "deadline",
+            name="uq_homework_group_subject_deadline",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

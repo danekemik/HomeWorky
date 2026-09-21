@@ -8,7 +8,11 @@ from app.database.repositories.subject_repository import SubjectRepository
 from app.database.repositories.user_repository import UserRepository
 from app.services import homework_service
 from app.services.group_service import GroupService
-from app.services.homework_service import HomeworkService
+from app.services.homework_service import (
+    HomeworkExistsError,
+    HomeworkLimitError,
+    HomeworkService,
+)
 
 
 async def _seed(session) -> tuple:
@@ -140,3 +144,101 @@ async def test_list_all_groups(session) -> None:
     await service.create_group(creator=user, name="Группа 2")
     groups = await GroupRepository(session).list_all()
     assert len(groups) == 2
+
+
+async def test_create_homework_rejects_duplicate_subject_date(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    deadline = date(2026, 9, 25)
+    await service.create_homework(
+        group_id=group.id,
+        subject_id=subject.id,
+        author_id=owner.id,
+        title="Первая",
+        deadline=deadline,
+    )
+    with pytest.raises(HomeworkExistsError):
+        await service.create_homework(
+            group_id=group.id,
+            subject_id=subject.id,
+            author_id=owner.id,
+            title="Дубликат",
+            deadline=deadline,
+        )
+    assert await service.find_by_subject_and_date(
+        group.id, subject.id, deadline
+    ) is not None
+
+
+async def test_same_subject_other_date_allowed(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    await service.create_homework(
+        group_id=group.id,
+        subject_id=subject.id,
+        author_id=owner.id,
+        title="Первая",
+        deadline=date(2026, 9, 25),
+    )
+    second = await service.create_homework(
+        group_id=group.id,
+        subject_id=subject.id,
+        author_id=owner.id,
+        title="Вторая",
+        deadline=date(2026, 9, 26),
+    )
+    assert second.title == "Вторая"
+
+
+async def test_attachment_limit_per_homework(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    service = HomeworkService(session)
+    for i in range(3):
+        await service.add_attachment(
+            hw,
+            telegram_file_id=f"FILE{i}",
+            file_type=AttachmentType.DOCUMENT,
+            file_name=f"file{i}.pdf",
+            author_id=owner.id,
+        )
+    with pytest.raises(HomeworkLimitError):
+        await service.add_attachment(
+            hw,
+            telegram_file_id="FILE4",
+            file_type=AttachmentType.DOCUMENT,
+            author_id=owner.id,
+        )
+    assert await service.attachment_count(hw) == 3
+
+
+async def test_add_delete_attachment_by_member(session) -> None:
+    group, owner, other, _admin, subject = await _seed(session)
+    hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    service = HomeworkService(session)
+    attachment = await service.add_attachment(
+        hw,
+        telegram_file_id="MEMFILE",
+        file_type=AttachmentType.PHOTO,
+        author_id=other.id,
+    )
+    detail = await service.get_detail(hw)
+    assert detail.attachments[0].author_name == "Пётр"
+    saved = (await service.attachments_for(hw))[0]
+    assert await service.can_delete_attachment(
+        other, group.id, hw, saved
+    ) is True
+    assert await service.can_delete_attachment(
+        owner, group.id, hw, saved
+    ) is True
+    await service.delete_attachment(hw, attachment.id)
+    assert await service.attachment_count(hw) == 0
+
+
+async def test_non_member_is_not_member(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    outsider = await UserRepository(session).get_or_create(
+        555, username="outsider", first_name="Кто-то"
+    )
+    assert await HomeworkService(session).is_member(outsider, group.id) is False

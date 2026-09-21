@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.calendar import build_calendar_markup
 from app.bot.callbacks import (
     FILE_SEND,
+    HW_ADD_FILES,
     HW_DELETE,
     HW_DELETE_CONFIRM,
+    HW_DELETE_FILE,
     HW_DETAIL,
     HW_EDIT,
     HW_EDIT_FIELD,
@@ -39,7 +41,12 @@ from app.bot.messages import NO_GROUP_TEXT
 from app.bot.render import edit_or_resend
 from app.bot.states.homework import HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
-from app.services.homework_service import HomeworkDetail, HomeworkService
+from app.services.homework_service import (
+    AttachmentInfo,
+    HomeworkDetail,
+    HomeworkLimitError,
+    HomeworkService,
+)
 
 router = Router(name="views")
 
@@ -91,7 +98,11 @@ async def _list_homeworks(
 
 
 def _detail_payload(
-    homework: Homework, detail: HomeworkDetail, can_modify: bool
+    homework: Homework,
+    detail: HomeworkDetail,
+    can_modify: bool,
+    can_add_files: bool,
+    deleteable_attachment_ids: set[int],
 ) -> tuple[str, InlineKeyboardMarkup]:
     text = build_homework_card(
         subject=detail.subject,
@@ -99,7 +110,11 @@ def _detail_payload(
         deadline=homework.deadline,
         description=homework.description,
         author_name=detail.author_name,
-        attachment_lines=[],
+        attachment_lines=[
+            _attachment_line(item)
+            for item in detail.attachments
+        ],
+        attachment_limit=HomeworkService.MAX_ATTACHMENTS,
         link_lines=[link.title or link.url for link in detail.links],
     )
     from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -108,20 +123,67 @@ def _detail_payload(
     if can_modify:
         builder.button(text="✏️ Изменить", callback_data=f"{HW_EDIT}{homework.id}")
         builder.button(text="🗑 Удалить", callback_data=f"{HW_DELETE}{homework.id}")
+    if can_add_files:
+        builder.button(
+            text="📎 Добавить файлы",
+            callback_data=f"{HW_ADD_FILES}{homework.id}",
+        )
+    for item in detail.attachments:
+        if item.id in deleteable_attachment_ids:
+            builder.button(
+                text=f"🗑 {esc(item.file_name or 'Файл')}",
+                callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
+            )
     builder.button(text="🔙 В меню", callback_data=MENU_BACK)
     builder.adjust(1)
     return text, builder.as_markup()
 
 
+def _attachment_line(item: AttachmentInfo) -> str:
+    name = item.file_name or (
+        "🖼 Фото" if item.file_type == AttachmentType.PHOTO else "📄 Файл"
+    )
+    if item.author_name:
+        return f"{name} — {item.author_name}"
+    return name
+
+
+async def _deleteable_attachment_ids(
+    service: HomeworkService,
+    user: User,
+    homework: Homework,
+    detail: HomeworkDetail,
+) -> set[int]:
+    if await service.can_modify(user, homework.group_id, homework):
+        return {item.id for item in detail.attachments}
+    return {
+        item.id
+        for item in detail.attachments
+        if item.author_id == user.id
+    }
+
+
 async def _open_detail(
     message: Message,
     bot: Bot,
+    session: AsyncSession,
+    user: User,
     service: HomeworkService,
     homework: Homework,
-    detail: HomeworkDetail,
-    can_modify: bool,
 ) -> None:
-    text, markup = _detail_payload(homework, detail, can_modify)
+    detail = await service.get_detail(homework)
+    can_modify = await service.can_modify(user, homework.group_id, homework)
+    can_add_files = await service.is_member(user, homework.group_id)
+    deleteables = await _deleteable_attachment_ids(
+        service, user, homework, detail
+    )
+    text, markup = _detail_payload(
+        homework,
+        detail,
+        can_modify,
+        can_add_files,
+        deleteables,
+    )
     attachments = await service.attachments_for(homework)
     if not attachments:
         await message.edit_text(text, reply_markup=markup)
@@ -185,7 +247,17 @@ async def render_homework_detail(
         return False
     detail = await service.get_detail(homework)
     can_modify = await service.can_modify(user, group.id, homework)
-    text, markup = _detail_payload(homework, detail, can_modify)
+    can_add_files = await service.is_member(user, group.id)
+    deleteables = await _deleteable_attachment_ids(
+        service, user, homework, detail
+    )
+    text, markup = _detail_payload(
+        homework,
+        detail,
+        can_modify,
+        can_add_files,
+        deleteables,
+    )
     await message.edit_text(text, reply_markup=markup)
     return True
 
@@ -400,13 +472,110 @@ async def on_homework_detail(
     if homework is None:
         await query.answer("Задание не найдено.", show_alert=True)
         return
-    detail = await service.get_detail(homework)
-    can_modify = await service.can_modify(user, group.id, homework)
     await state.clear()
     await _open_detail(
-        query.message, bot, service, homework, detail, can_modify
+        query.message, bot, session, user, service, homework
     )
     await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(HW_ADD_FILES))
+async def on_add_files(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    homework_id = int(query.data[len(HW_ADD_FILES):])
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
+        await query.answer("Задание не найдено.", show_alert=True)
+        return
+    if not await service.is_member(user, group.id):
+        await query.answer("Добавлять файлы могут только участники группы.", show_alert=True)
+        return
+    if await service.attachment_count(homework) >= HomeworkService.MAX_ATTACHMENTS:
+        await query.answer(
+            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание.",
+            show_alert=True,
+        )
+        return
+    await state.set_state(HomeworkEditField.attachment)
+    select_current_group(user, group.id)
+    await state.update_data(
+        add_only=True,
+        homework_id=homework_id,
+        current_group_id=group.id,
+        attachments=[],
+        links=[],
+    )
+    from app.bot.handlers.homework import ATTACH_PENDING
+
+    await edit_or_resend(
+        query.message,
+        ATTACH_PENDING,
+        markup=attachment_keyboard(False),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(HW_DELETE_FILE))
+async def on_delete_file(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    payload = query.data[len(HW_DELETE_FILE):]
+    homework_raw, _, attachment_raw = payload.partition(":")
+    if not homework_raw or not attachment_raw:
+        await query.answer()
+        return
+    try:
+        homework_id, attachment_id = int(homework_raw), int(attachment_raw)
+    except ValueError:
+        await query.answer()
+        return
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
+        await query.answer("Задание не найдено.", show_alert=True)
+        return
+    attachments = await service.attachments_for(homework)
+    attachment = next(
+        (item for item in attachments if item.id == attachment_id), None
+    )
+    if attachment is None:
+        await query.answer("Файл не найден.", show_alert=True)
+        return
+    if not await service.can_delete_attachment(
+        user, group.id, homework, attachment
+    ):
+        await query.answer(
+            "Удалить этот файл может его автор, автор задания или староста.",
+            show_alert=True,
+        )
+        return
+    await service.delete_attachment(homework, attachment_id)
+    await _open_detail(query.message, bot, session, user, service, homework)
+    await query.answer("Файл удалён.")
 
 
 @router.callback_query(CallbackDataPrefix(HW_EDIT))
@@ -546,7 +715,10 @@ async def _apply_text_field(
         await service.update_homework(homework, description=value)
     await state.clear()
     detail = await service.get_detail(homework)
-    text, markup = _detail_payload(homework, detail, True)
+    deleteables = {item.id for item in detail.attachments}
+    text, markup = _detail_payload(
+        homework, detail, True, True, deleteables
+    )
     await message.answer(text, reply_markup=markup)
 
 
@@ -590,9 +762,23 @@ async def _finish_edit(
     message: Message,
     service: HomeworkService,
     homework: Homework,
+    user: User,
 ) -> None:
     detail = await service.get_detail(homework)
-    text, markup = _detail_payload(homework, detail, True)
+    can_modify = await service.can_modify(
+        user, homework.group_id, homework
+    )
+    can_add_files = await service.is_member(user, homework.group_id)
+    deleteables = await _deleteable_attachment_ids(
+        service, user, homework, detail
+    )
+    text, markup = _detail_payload(
+        homework,
+        detail,
+        can_modify,
+        can_add_files,
+        deleteables,
+    )
     await message.edit_text(text, reply_markup=markup)
 
 
@@ -626,7 +812,7 @@ async def apply_edit_field(
         homework.description = None
     await session.flush()
     await state.clear()
-    await _finish_edit(query.message, service, homework)
+    await _finish_edit(query.message, service, homework, user)
     await query.answer()
 
 
@@ -649,20 +835,36 @@ async def finalize_edit_attachments(
         return
     service = HomeworkService(session)
     homework = await service.get_for_group(int(homework_id), group.id)
-    if homework is None or not await service.can_modify(user, group.id, homework):
+    if homework is None or not await service.is_member(user, group.id):
         await state.clear()
         await query.answer("Доступ запрещён.", show_alert=True)
         return
-    if data.get("deadline"):
+    can_modify = await service.can_modify(user, group.id, homework)
+    if not can_modify and not data.get("add_only"):
+        await state.clear()
+        await query.answer(
+            "Изменять задание может только его автор или староста.",
+            show_alert=True,
+        )
+        return
+    if data.get("deadline") and can_modify:
         homework.deadline = date.fromisoformat(str(data["deadline"]))
-    await service.attach_pending(
-        homework,
-        attachments=list(data.get("attachments", [])),  # type: ignore[arg-type]
-        links=list(data.get("links", [])),  # type: ignore[arg-type]
-    )
+    try:
+        await service.attach_pending(
+            homework,
+            attachments=list(data.get("attachments", [])),  # type: ignore[arg-type]
+            links=list(data.get("links", [])),  # type: ignore[arg-type]
+            author_id=user.id,
+        )
+    except HomeworkLimitError:
+        await query.answer(
+            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание.",
+            show_alert=True,
+        )
+        return
     await session.flush()
     await state.clear()
-    await _finish_edit(query.message, service, homework)
+    await _finish_edit(query.message, service, homework, user)
     await query.answer()
 
 

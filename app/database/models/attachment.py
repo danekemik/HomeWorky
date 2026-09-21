@@ -19,6 +19,9 @@ class Attachment(Base):
     homework_id: Mapped[int] = mapped_column(
         ForeignKey("homeworks.id", ondelete="CASCADE"), index=True
     )
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     telegram_file_id: Mapped[str] = mapped_column(String(512))
     file_type: Mapped[AttachmentType] = mapped_column(
         Enum(AttachmentType, native_enum=False),

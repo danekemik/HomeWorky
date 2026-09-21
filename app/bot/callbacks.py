@@ -21,5 +21,7 @@ HW_DELETE = "hw:del:"  # hw:del:{homework_id}
 HW_DELETE_CONFIRM = "hw:delc:"  # hw:delc:{homework_id}
 HW_EDIT = "hw:edit:"  # hw:edit:{homework_id}
 HW_EDIT_FIELD = "hw:fld:"  # hw:fld:{field[|homework_id]}
+HW_ADD_FILES = "hw:addf:"  # hw:addf:{homework_id}
+HW_DELETE_FILE = "hw:delf:"  # hw:delf:{homework_id}:{attachment_id}
 FILE_SEND = "file:"  # file:{homework_id}:{attachment_id}
 MENU_BACK = "menu:main"

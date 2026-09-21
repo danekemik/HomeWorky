@@ -25,11 +25,21 @@ class HomeworkAccessError(Exception):
     """Пользователю запрещено изменение/удаление этого задания."""
 
 
+class HomeworkExistsError(Exception):
+    """На этот предмет и дату уже есть домашнее задание."""
+
+
+class HomeworkLimitError(Exception):
+    """Превышен лимит вложений (3 файла/фото на домашку)."""
+
+
 @dataclass(frozen=True)
 class AttachmentInfo:
     id: int
     file_type: AttachmentType
     file_name: str | None
+    author_id: int | None
+    author_name: str | None
 
 
 @dataclass(frozen=True)
@@ -47,12 +57,24 @@ class HomeworkDetail:
 
 
 class HomeworkService:
+    MAX_ATTACHMENTS = 3
+
     def __init__(self, session: AsyncSession) -> None:
         self._repo = HomeworkRepository(session)
         self._groups = GroupRepository(session)
         self._subjects = SubjectRepository(session)
         self._users = UserRepository(session)
         self._session = session
+
+    async def find_by_subject_and_date(
+        self, group_id: int, subject_id: int, deadline: date
+    ) -> Homework | None:
+        return await self._repo.find_by_subject_and_deadline(
+            group_id, subject_id, deadline
+        )
+
+    async def attachment_count(self, homework: Homework) -> int:
+        return await self._repo.count_attachments(homework.id)
 
     async def create_homework(
         self,
@@ -64,6 +86,9 @@ class HomeworkService:
         deadline: date,
         description: str | None = None,
     ) -> Homework:
+        exists = await self.find_by_subject_and_date(group_id, subject_id, deadline)
+        if exists is not None:
+            raise HomeworkExistsError
         return await self._repo.create(
             group_id=group_id,
             subject_id=subject_id,
@@ -161,13 +186,40 @@ class HomeworkService:
         telegram_file_id: str,
         file_type: AttachmentType,
         file_name: str | None = None,
+        author_id: int | None = None,
     ) -> Attachment:
+        if await self._repo.count_attachments(homework.id) >= self.MAX_ATTACHMENTS:
+            raise HomeworkLimitError
         return await self._repo.add_attachment(
             homework.id,
             telegram_file_id=telegram_file_id,
             file_type=file_type,
             file_name=file_name,
+            author_id=author_id,
         )
+
+    async def delete_attachment(
+        self, homework: Homework, attachment_id: int
+    ) -> None:
+        await self._repo.delete_attachment(attachment_id)
+
+    async def can_delete_attachment(
+        self,
+        user: User,
+        group_id: int,
+        homework: Homework,
+        attachment: Attachment,
+    ) -> bool:
+        if await self.can_modify(user, group_id, homework):
+            return True
+        membership = await self._groups.get_membership(group_id, user.id)
+        if membership is None:
+            return False
+        return attachment.author_id == user.id
+
+    async def is_member(self, user: User, group_id: int) -> bool:
+        membership = await self._groups.get_membership(group_id, user.id)
+        return membership is not None
 
     async def add_link(
         self, homework: Homework, *, url: str, title: str | None = None
@@ -191,6 +243,12 @@ class HomeworkService:
                 id=item.id,
                 file_type=item.file_type,
                 file_name=item.file_name,
+                author_id=item.author_id,
+                author_name=(
+                    self._author_label(await self._users.get(item.author_id))
+                    if item.author_id is not None
+                    else None
+                ),
             )
             for item in await self._repo.attachments_for(homework.id)
         ]
@@ -210,6 +268,7 @@ class HomeworkService:
         homework: Homework,
         attachments: list[dict[str, object]],
         links: list[dict[str, object]],
+        author_id: int | None = None,
     ) -> None:
         for item in attachments:
             file_name = item.get("file_name")
@@ -218,6 +277,7 @@ class HomeworkService:
                 telegram_file_id=str(item["telegram_file_id"]),
                 file_type=AttachmentType(str(item["file_type"])),
                 file_name=str(file_name) if file_name else None,
+                author_id=author_id,
             )
         for item in links:
             title = item.get("title")
