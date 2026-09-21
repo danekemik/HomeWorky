@@ -12,6 +12,7 @@ from app.services.homework_service import (
     HomeworkExistsError,
     HomeworkLimitError,
     HomeworkService,
+    SubjectError,
 )
 
 
@@ -300,3 +301,54 @@ async def test_pagination_and_counts(session) -> None:
     assert len(first) == 2
     assert len(second) == 2
     assert {hw.id for hw in first}.isdisjoint({hw.id for hw in second})
+
+
+async def test_rename_subject_success(session) -> None:
+    group, _owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    await service.rename_subject(subject, "  АЛГЕБРА ")
+    assert subject.name == "АЛГЕБРА"
+    assert await service.subject_by_name(group.id, "алгебра") is subject
+
+
+async def test_rename_subject_rejects_duplicate(session) -> None:
+    group, _owner, _other, _admin, subject = await _seed(session)
+    await SubjectRepository(session).create(group.id, "Физика")
+    service = HomeworkService(session)
+    with pytest.raises(SubjectError):
+        await service.rename_subject(subject, "физика")
+    assert subject.name == "Математика"
+
+
+async def test_rename_subject_rejects_empty_and_too_long(session) -> None:
+    _group, _owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    with pytest.raises(SubjectError):
+        await service.rename_subject(subject, "   ")
+    with pytest.raises(SubjectError):
+        await service.rename_subject(subject, "я" * 129)
+    assert subject.name == "Математика"
+
+
+async def test_delete_subject_removes_its_homeworks(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    await service.add_attachment(
+        hw,
+        telegram_file_id="F1",
+        file_type=AttachmentType.DOCUMENT,
+        file_name="a.pdf",
+    )
+    await service.add_link(hw, url="https://example.com", title="Материалы")
+    other = await SubjectRepository(session).create(group.id, "Физика")
+    await _make_hw(session, group, other, owner, date(2026, 9, 26))
+
+    deleted = await service.delete_subject(subject)
+
+    assert deleted == 1
+    assert await service.count_subject_homeworks(subject) == 0
+    assert await HomeworkRepository(session).count_for_group(group.id) == 1
+    assert [s.id for s in await service.list_subjects(group.id)] == [other.id]
+    assert await service.attachments_for(hw) == []
+    assert await service.links_for(hw) == []

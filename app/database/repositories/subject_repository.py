@@ -32,3 +32,19 @@ class SubjectRepository(BaseRepository[Subject]):
     async def create(self, group_id: int, name: str) -> Subject:
         subject = Subject(group_id=group_id, name=name)
         return await self.add(subject)
+
+    async def name_exists(
+        self, group_id: int, name: str, *, exclude_id: int | None = None
+    ) -> bool:
+        stmt = select(Subject.id).where(
+            Subject.group_id == group_id,
+            func.lower(Subject.name) == name.strip().lower(),
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Subject.id != exclude_id)
+        return (await self._session.scalar(stmt.limit(1))) is not None
+
+    async def rename(self, subject: Subject, name: str) -> Subject:
+        subject.name = name
+        await self._session.flush()
+        return subject

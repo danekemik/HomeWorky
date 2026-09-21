@@ -9,6 +9,8 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 from app.bot.handlers import homework as homework_handlers
+from app.bot.handlers import menu as menu_handlers
+from app.bot.states.group_flow import GroupFlow
 from app.bot.states.homework import HomeworkCreation
 from app.database.repositories.group_repository import GroupRepository
 from app.database.repositories.homework_repository import HomeworkRepository
@@ -56,6 +58,13 @@ class StubSession(BaseSession):
             if type(method).__name__ == "EditMessageText"
         ]
 
+    def sent_texts(self) -> list[str]:
+        return [
+            getattr(method, "text", "")
+            for method in self.methods
+            if type(method).__name__ == "SendMessage"
+        ]
+
 
 def _message(bot: Bot, chat_id: int = 1) -> Message:
     message = Message.model_validate(
@@ -81,6 +90,19 @@ def _callback(bot: Bot, data: str, chat_id: int = 1) -> CallbackQuery:
         }
     )
     return query.as_(bot)
+
+
+def _incoming(bot: Bot, text: str, chat_id: int = 1) -> Message:
+    message = Message.model_validate(
+        {
+            "message_id": 11,
+            "date": 0,
+            "chat": {"id": chat_id, "type": "private"},
+            "from_user": {"id": 1, "is_bot": False, "first_name": "Test"},
+            "text": text,
+        }
+    )
+    return message.as_(bot)
 
 
 @pytest.fixture
@@ -166,3 +188,40 @@ async def test_calendar_past_date_is_rejected(session, bot, flow):
 
     assert await context.get_state() == HomeworkCreation.deadline.state
     assert bot.session.texts() == []
+
+
+async def test_create_group_duplicate_name_warns(session, bot, flow):
+    _group, user, _subject, context = flow
+    groups = GroupRepository(session)
+    await GroupService(session).create_group(creator=user, name="Математика")
+    before = len(await groups.list_all())
+    await context.set_state(GroupFlow.create_name)
+
+    await menu_handlers.on_create_group_name(
+        message=_incoming(bot, "математика"),
+        session=session,
+        user=user,
+        state=context,
+    )
+
+    assert any("уже существует" in text for text in bot.session.sent_texts())
+    assert await context.get_state() == GroupFlow.create_name.state
+    assert len(await groups.list_all()) == before
+
+
+async def test_create_group_unique_name_succeeds(session, bot, flow):
+    _group, user, _subject, context = flow
+    groups = GroupRepository(session)
+    before = len(await groups.list_all())
+    await context.set_state(GroupFlow.create_name)
+
+    await menu_handlers.on_create_group_name(
+        message=_incoming(bot, "Новая группа"),
+        session=session,
+        user=user,
+        state=context,
+    )
+
+    assert not any("уже существует" in text for text in bot.session.sent_texts())
+    assert await context.get_state() != GroupFlow.create_name.state
+    assert len(await groups.list_all()) == before + 1

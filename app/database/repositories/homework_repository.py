@@ -164,6 +164,27 @@ class HomeworkRepository(BaseRepository[Homework]):
             "tomorrow": int(due_tomorrow),
         }
 
+    async def count_for_subject(self, subject_id: int) -> int:
+        stmt = select(func.count(Homework.id)).where(Homework.subject_id == subject_id)
+        return int((await self._session.scalar(stmt)) or 0)
+
+    async def delete_for_subject(self, subject_id: int) -> int:
+        """Удаляет задания предмета (и их вложения/ссылки); возвращает число ДЗ."""
+        ids_stmt = select(Homework.id).where(Homework.subject_id == subject_id)
+        ids = list((await self._session.scalars(ids_stmt)).all())
+        if not ids:
+            return 0
+        await self._session.execute(
+            delete(Attachment).where(Attachment.homework_id.in_(ids))
+        )
+        await self._session.execute(
+            delete(HomeworkLink).where(HomeworkLink.homework_id.in_(ids))
+        )
+        await self._session.execute(
+            delete(Homework).where(Homework.id.in_(ids))
+        )
+        return len(ids)
+
     async def delete_expired(self, before: date) -> int:
         ids_stmt = select(Homework.id).where(Homework.deadline < before)
         ids = list((await self._session.scalars(ids_stmt)).all())

@@ -34,6 +34,24 @@ class HomeworkLimitError(Exception):
     """Превышен лимит вложений (3 файла/фото на домашку)."""
 
 
+class SubjectError(Exception):
+    """Ошибка бизнес-логики предметов (передаётся пользователю дословно)."""
+
+
+_SUBJECT_NAME_MAX = 128
+
+
+def _clean_subject_name(name: str) -> str:
+    clean = " ".join(name.split()).strip()
+    if not clean:
+        raise SubjectError("Название предмета не может быть пустым.")
+    if len(clean) > _SUBJECT_NAME_MAX:
+        raise SubjectError(
+            f"Название слишком длинное (максимум {_SUBJECT_NAME_MAX} символов)."
+        )
+    return clean
+
+
 @dataclass(frozen=True)
 class AttachmentInfo:
     id: int
@@ -233,6 +251,35 @@ class HomeworkService:
             if existing is not None:
                 return existing
             raise
+
+    async def rename_subject(self, subject: Subject, name: str) -> Subject:
+        clean = _clean_subject_name(name)
+        if clean.lower() == subject.name.lower():
+            return subject
+        if await self._subjects.name_exists(
+            subject.group_id, clean, exclude_id=subject.id
+        ):
+            raise SubjectError("Предмет с таким названием уже есть в группе.")
+        try:
+            async with self._session.begin_nested():
+                return await self._subjects.rename(subject, clean)
+        except IntegrityError as exc:
+            if await self._subjects.name_exists(
+                subject.group_id, clean, exclude_id=subject.id
+            ):
+                raise SubjectError(
+                    "Предмет с таким названием уже есть в группе."
+                ) from exc
+            raise
+
+    async def count_subject_homeworks(self, subject: Subject) -> int:
+        return await self._repo.count_for_subject(subject.id)
+
+    async def delete_subject(self, subject: Subject) -> int:
+        """Удаляет предмет вместе с заданиями; возвращает число удалённых ДЗ."""
+        deleted = await self._repo.delete_for_subject(subject.id)
+        await self._subjects.delete(subject)
+        return deleted
 
     async def add_attachment(
         self,

@@ -10,3 +10,4 @@ class GroupFlow(StatesGroup):
 class SettingsFlow(StatesGroup):
     change_name = State()
     rename_group = State()
+    rename_subject = State()

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
 from aiogram.enums import ChatType
@@ -179,3 +179,48 @@ async def test_rename_group_allows_same_name_case_change(session) -> None:
     group = await service.create_group(creator=creator, name="ВКБ-22")
     await service.rename_group(group, "вкб-22")
     assert group.name == "вкб-22"
+
+
+async def test_leave_group_removes_membership(session) -> None:
+    creator = await _creator(session)
+    group = await GroupService(session).create_group(creator=creator, name="Выход")
+    member = await _member(session, 7)
+    service = GroupService(session)
+    await service.join_group(group=group, user=member, code=group.invite_code)
+    member.selected_group_id = group.id
+    await service.leave_group(group, member)
+    assert (
+        await GroupRepository(session).get_membership(group.id, member.id) is None
+    )
+    assert member.selected_group_id is None
+
+
+async def test_leave_group_sole_admin_forbidden(session) -> None:
+    creator = await _creator(session)
+    group = await GroupService(session).create_group(creator=creator, name="Один")
+    with pytest.raises(GroupError):
+        await GroupService(session).leave_group(group, creator)
+
+
+async def test_leave_group_second_admin_can_leave(session) -> None:
+    creator = await _creator(session)
+    group = await GroupService(session).create_group(creator=creator, name="Двое")
+    admin2 = await _member(session, 8)
+    await GroupRepository(session).upsert_membership(
+        group.id, admin2.id, MemberRole.ADMIN
+    )
+    await GroupService(session).leave_group(group, admin2)
+    assert (
+        await GroupRepository(session).get_membership(group.id, admin2.id) is None
+    )
+    assert await GroupService(session).is_admin(group, creator)
+
+
+async def test_set_reminder_time(session) -> None:
+    creator = await _creator(session)
+    group = await GroupService(session).create_group(creator=creator, name="Время")
+    service = GroupService(session)
+    await service.set_reminder_time(group, time(19, 30))
+    assert group.reminder_time == time(19, 30)
+    await service.set_reminder_time(group, None)
+    assert group.reminder_time is None

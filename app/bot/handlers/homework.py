@@ -42,6 +42,7 @@ from app.bot.messages import NO_GROUP_TEXT
 from app.bot.states.group_flow import GroupFlow, SettingsFlow
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
+from app.database.repositories.subject_repository import SubjectRepository
 from app.services.group_service import GroupService
 from app.services.homework_service import (
     HomeworkDetail,
@@ -835,6 +836,23 @@ async def on_flow_cancel(
         await state.clear()
         if group_id is not None:
             await render_management(query, session, user, int(group_id))
+            return
+        await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
+    if state_name == SettingsFlow.rename_subject.state:
+        from app.bot.handlers.settings import render_subjects
+
+        data = await state.get_data()
+        subject_id = data.get("rename_subject_id")
+        await state.clear()
+        subject = (
+            await SubjectRepository(session).get(subject_id)
+            if subject_id is not None
+            else None
+        )
+        if subject is not None:
+            await render_subjects(query, session, user, subject.group_id)
             return
         await _back_to_menu(message, bot, session, user, state)
         await query.answer()

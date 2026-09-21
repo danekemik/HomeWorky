@@ -1,11 +1,12 @@
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
 from app.config import Settings
+from app.database.models import Group
 from app.database.repositories.group_repository import GroupRepository
 from app.database.session import Database
 from app.services.notification_service import NotificationService
@@ -14,29 +15,67 @@ logger = logging.getLogger(__name__)
 
 
 async def run_reminder_loop(bot: Bot, database: Database, cfg: Settings) -> None:
-    """Раз в сутки в REMINDER_TIME рассылает по группам дедлайны на завтра."""
+    """Раз в сутки в нужное время рассылает по группам дедлайны на завтра.
+
+    Время напоминания берётся у каждой группы (groups.reminder_time),
+    если оно задано, иначе — глобальное REMINDER_TIME из настроек.
+    """
+    last_cleanup: date | None = None
     while True:
         now = datetime.now(cfg.tz)
-        target_time = datetime.combine(
-            now.date(), cfg.reminder_time, tzinfo=cfg.tz
-        )
-        if now < target_time:
-            await _sleep_until(target_time, cfg.tz)
+        if last_cleanup != now.date():
+            await _try_cleanup(database, now.date())
+            last_cleanup = now.date()
 
-        try:
-            await _send_tomorrow_digests(bot, database, datetime.now(cfg.tz).date())
-        except Exception:
-            logger.exception("Не удалось выполнить вечернюю рассылку")
-        try:
-            await _cleanup_expired_homeworks(database, datetime.now(cfg.tz).date())
-        except Exception:
-            logger.exception("Не удалось почистить просроченные задания")
+        groups = await _bound_groups(database)
+        if groups:
+            target = min(
+                _next_datetime(now, group.reminder_time or cfg.reminder_time)
+                for group in groups
+            )
+        else:
+            target = _next_datetime(now, cfg.reminder_time)
+        await _sleep_until(target, cfg.tz)
 
-        next_day = datetime.now(cfg.tz).date() + timedelta(days=1)
-        next_target = datetime.combine(
-            next_day, cfg.reminder_time, tzinfo=cfg.tz
-        )
-        await _sleep_until(next_target, cfg.tz)
+        now = datetime.now(cfg.tz)
+        if last_cleanup != now.date():
+            await _try_cleanup(database, now.date())
+            last_cleanup = now.date()
+        await _try_send(bot, database, now, groups, cfg)
+
+
+async def _try_cleanup(database: Database, today: date) -> None:
+    try:
+        await _cleanup_expired_homeworks(database, today)
+    except Exception:
+        logger.exception("Не удалось почистить просроченные задания")
+
+
+async def _try_send(
+    bot: Bot, database: Database, now: datetime, groups: list[Group], cfg: Settings
+) -> None:
+    try:
+        await _send_tomorrow_digests(bot, database, now, groups, cfg)
+    except Exception:
+        logger.exception("Не удалось выполнить вечернюю рассылку")
+
+
+def _next_datetime(now: datetime, reminder: time) -> datetime:
+    """Ближайшее будущее время запуска относительно now (сегодня или завтра)."""
+    scheduled = datetime.combine(now.date(), reminder, tzinfo=now.tzinfo)
+    if scheduled <= now:
+        scheduled += timedelta(days=1)
+    return scheduled
+
+
+async def _bound_groups(database: Database) -> list[Group]:
+    """Группы, к которым привязан Telegram-чат (туда приходят напоминания)."""
+    async with database.session_factory() as session:
+        return [
+            group
+            for group in await GroupRepository(session).list_all()
+            if group.telegram_chat_id is not None
+        ]
 
 
 async def _sleep_until(target: datetime, tz: tzinfo) -> None:
@@ -45,17 +84,25 @@ async def _sleep_until(target: datetime, tz: tzinfo) -> None:
         await asyncio.sleep(delta)
 
 
-async def _send_tomorrow_digests(bot: Bot, database: Database, today: date) -> None:
+async def _send_tomorrow_digests(
+    bot: Bot,
+    database: Database,
+    now: datetime,
+    groups: list[Group],
+    cfg: Settings,
+) -> None:
+    """Шлёт дайджест группам, чьё время напоминания совпало с now."""
+    target = now.date() + timedelta(days=1)
+    due = (now.hour, now.minute)
     async with database.session_factory() as session:
-        groups = await GroupRepository(session).list_all()
-        target = today + timedelta(days=1)
         service = NotificationService(session)
         for group in groups:
-            if group.telegram_chat_id is None:
+            scheduled = group.reminder_time or cfg.reminder_time
+            if (scheduled.hour, scheduled.minute) != due:
                 continue
             items = await service.collect_digest(group.id, target)
             text = service.build_digest_text(target, items)
-            if not text:
+            if not text or group.telegram_chat_id is None:
                 continue
             try:
                 await bot.send_message(group.telegram_chat_id, text)

@@ -1,5 +1,5 @@
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 from aiogram.enums import ChatType
 from aiogram.types import Chat
@@ -147,6 +147,33 @@ class GroupService:
         if group.created_by == target_user_id:
             raise GroupError("Нельзя удалить создателя группы.")
         await self._groups.remove_membership(group.id, target_user_id)
+
+    async def leave_group(self, group: Group, user: User) -> None:
+        """Участник выходит из группы сам. Единственный староста выйти не может."""
+        membership = await self._groups.get_membership(group.id, user.id)
+        if membership is None:
+            return
+        if membership.role == MemberRole.ADMIN:
+            admins = [
+                m
+                for m in await self._groups.list_members(group.id)
+                if m.role == MemberRole.ADMIN
+            ]
+            if len(admins) <= 1:
+                raise GroupError(
+                    "Ты единственный староста группы — покинуть её нельзя."
+                )
+        await self._groups.remove_membership(group.id, user.id)
+        if user.selected_group_id == group.id:
+            user.selected_group_id = None
+        await self._session.flush()
+
+    async def set_reminder_time(
+        self, group: Group, reminder: time | None
+    ) -> Group:
+        group.reminder_time = reminder
+        await self._session.flush()
+        return group
 
     async def invite_info(
         self, group: Group

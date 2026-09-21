@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     String,
+    Time,
     UniqueConstraint,
     func,
 )
@@ -38,6 +39,9 @@ class Group(TimestampMixin, Base):
     )
     telegram_chat_id: Mapped[int | None] = mapped_column(
         BigInteger, unique=True, index=True, nullable=True
+    )
+    reminder_time: Mapped[time | None] = mapped_column(
+        Time, nullable=True
     )
 
 
