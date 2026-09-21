@@ -6,6 +6,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaDocument,
     InputMediaPhoto,
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.calendar import build_calendar_markup
 from app.bot.callbacks import (
+    DETAIL_BACK,
     HW_ADD_FILES,
     HW_DELETE,
     HW_DELETE_CONFIRM,
@@ -33,6 +35,7 @@ from app.bot.formats import (
     bot_today,
     build_homework_card,
     esc,
+    format_date_russian,
     format_homework_label,
     safe_int,
 )
@@ -73,10 +76,12 @@ _CATEGORY_TITLES = {
 EMPTY_LINE = "  — заданий нет"
 
 _ALBUM_MAX_ITEMS = 10
-_ACTION_HINT = "🔧 Действия с заданием:"
 
 # (chat_id, homework_id) -> id сообщений карточки (альбом + кнопки)
 _sent_detail_messages: dict[tuple[int, int], list[int]] = {}
+
+# (chat_id, user_id) -> (категория, страница) последнего просмотренного списка
+_list_context: dict[tuple[int, int], tuple[str, int]] = {}
 
 
 def _remember_detail(
@@ -107,6 +112,19 @@ async def _cleanup_detail_messages(
             await bot.delete_message(chat_id, message_id)
         except Exception:
             pass
+
+
+def _remember_list_context(
+    chat_id: int, user_id: int, target: tuple[str, int]
+) -> None:
+    _list_context[(chat_id, user_id)] = target
+
+
+def _compact_caption(homework: Homework, detail: HomeworkDetail) -> str:
+    return (
+        f"📚 {esc(detail.subject)} · {esc(homework.title)} · "
+        f"до {format_date_russian(homework.deadline)}"
+    )
 
 
 def _attachment_send_plan(
@@ -188,21 +206,36 @@ def _detail_payload(
 
     builder = InlineKeyboardBuilder()
     if can_modify:
-        builder.button(text="✏️ Изменить", callback_data=f"{HW_EDIT}{homework.id}")
-        builder.button(text="🗑 Удалить", callback_data=f"{HW_DELETE}{homework.id}")
-    if can_add_files:
-        builder.button(
-            text="📎 Добавить файлы",
-            callback_data=f"{HW_ADD_FILES}{homework.id}",
+        builder.row(
+            InlineKeyboardButton(
+                text="✏️ Изменить", callback_data=f"{HW_EDIT}{homework.id}"
+            ),
+            InlineKeyboardButton(
+                text="🗑 Удалить", callback_data=f"{HW_DELETE}{homework.id}"
+            ),
         )
-    for item in detail.attachments:
-        if item.id in deleteable_attachment_ids:
-            builder.button(
-                text=f"🗑 {esc(item.file_name or 'Файл')}",
-                callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
+    if can_add_files:
+        builder.row(
+            InlineKeyboardButton(
+                text="📎 Добавить файлы",
+                callback_data=f"{HW_ADD_FILES}{homework.id}",
             )
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
-    builder.adjust(1)
+        )
+    delete_buttons = [
+        InlineKeyboardButton(
+            text=f"🗑 {esc(item.file_name or 'Файл')}",
+            callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
+        )
+        for item in detail.attachments
+        if item.id in deleteable_attachment_ids
+    ]
+    for index in range(0, len(delete_buttons), 2):
+        builder.row(*delete_buttons[index : index + 2])
+    builder.row(
+        InlineKeyboardButton(
+            text="🔙 К списку", callback_data=f"{DETAIL_BACK}{homework.id}"
+        )
+    )
     return text, builder.as_markup()
 
 
@@ -268,36 +301,34 @@ async def _open_detail(
     await _cleanup_detail_messages(bot, chat_id, homework_id)
     sent: list[Message] = []
     caption_placed = False
-    buttons_placed = False
     try:
         for operation, chunk in _attachment_send_plan(attachments):
             if operation == "album":
                 media = _album_media(
-                    chunk, text if not caption_placed else None
+                    chunk,
+                    _compact_caption(homework, detail)
+                    if not caption_placed
+                    else None,
                 )
                 if not caption_placed:
                     caption_placed = True
                 sent.extend(await bot.send_media_group(chat_id, media))
                 continue
             item = chunk[0]
+            media_caption = (
+                _compact_caption(homework, detail) if not caption_placed else None
+            )
             if not caption_placed:
-                item_caption = text
-                item_markup = markup
                 caption_placed = True
-                buttons_placed = True
-            else:
-                item_caption = None
-                item_markup = None
             if item.file_type == AttachmentType.PHOTO:
                 sent.append(
                     await bot.send_photo(
                         chat_id,
                         item.telegram_file_id,
-                        caption=item_caption,
+                        caption=media_caption,
                         parse_mode=(
-                            ParseMode.HTML if item_caption is not None else None
+                            ParseMode.HTML if media_caption is not None else None
                         ),
-                        reply_markup=item_markup,
                     )
                 )
             else:
@@ -305,17 +336,13 @@ async def _open_detail(
                     await bot.send_document(
                         chat_id,
                         item.telegram_file_id,
-                        caption=item_caption,
+                        caption=media_caption,
                         parse_mode=(
-                            ParseMode.HTML if item_caption is not None else None
+                            ParseMode.HTML if media_caption is not None else None
                         ),
-                        reply_markup=item_markup,
                     )
                 )
-        if not buttons_placed:
-            sent.append(
-                await bot.send_message(chat_id, _ACTION_HINT, reply_markup=markup)
-            )
+        sent.append(await bot.send_message(chat_id, text, reply_markup=markup))
         _remember_detail(chat_id, homework_id, sent)
     except Exception:
         try:
@@ -459,6 +486,9 @@ async def on_nearest_deadlines(
     lines += ["", "🐹 *закрывает календарь*"]
     builder.button(text="🔙 В меню", callback_data=MENU_BACK)
     builder.adjust(1)
+    _remember_list_context(
+        query.message.chat.id, user.id, ("nearest", 0)
+    )
     await query.message.edit_text("\n".join(lines), reply_markup=builder.as_markup())
     await query.answer()
 
@@ -539,6 +569,7 @@ async def _render_category_list(
         has_prev=page > 0,
         has_next=(page + 1) * PAGE_SIZE < total,
     )
+    _remember_list_context(query.message.chat.id, user.id, (category, page))
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
 
@@ -629,6 +660,47 @@ async def on_homework_detail(
         query.message, bot, session, user, service, homework
     )
     await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(DETAIL_BACK))
+async def on_detail_back(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    homework_id = safe_int(query.data[len(DETAIL_BACK):])
+    if homework_id is not None:
+        await _cleanup_detail_messages(
+            bot,
+            query.message.chat.id,
+            homework_id,
+            exclude=query.message.message_id,
+        )
+    target = _list_context.pop((query.message.chat.id, user.id), None)
+    if target is not None:
+        category, page = target
+        if category == "nearest":
+            await on_nearest_deadlines(query, bot, session, user, state)
+            return
+        if category in _CATEGORY_TITLES:
+            await _render_category_list(
+                query=query,
+                bot=bot,
+                session=session,
+                user=user,
+                state=state,
+                category=category,
+                page=page,
+            )
+            return
+    from app.bot.handlers.homework import _back_to_menu
+
+    await _back_to_menu(query.message, bot, session, user, state)
 
 
 @router.callback_query(CallbackDataPrefix(HW_ADD_FILES))

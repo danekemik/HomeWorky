@@ -4,8 +4,11 @@ from typing import Any
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
+from app.bot.callbacks import DETAIL_BACK, HW_DELETE_FILE
+from app.bot.formats import build_homework_card
 from app.bot.handlers.views import (
     _attachment_send_plan,
+    _detail_payload,
     _open_detail,
 )
 from app.database.models import Attachment, AttachmentType
@@ -159,7 +162,7 @@ async def test_open_detail_many_photos_go_in_one_album(session) -> None:
     assert buttons.reply_markup is not None
 
 
-async def test_open_detail_single_photo_attached_to_card(session) -> None:
+async def test_open_detail_single_file_sends_media_and_buttons(session) -> None:
     chat_id = 9002
     user, service, hw = await _seed_homework(session, attachments=1)
     recording = RecordingSession()
@@ -169,12 +172,18 @@ async def test_open_detail_single_photo_attached_to_card(session) -> None:
     await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
 
     names = recording.names()
-    assert names == ["DeleteMessage", "SendPhoto"]
+    assert names == ["DeleteMessage", "SendPhoto", "SendMessage"]
     photo = next(
         call for call in recording.calls if type(call).__name__ == "SendPhoto"
     )
     assert photo.caption is not None
-    assert photo.reply_markup is not None
+    assert "Задачи №1-20" in photo.caption
+    assert photo.reply_markup is None
+    message = next(
+        call for call in recording.calls if type(call).__name__ == "SendMessage"
+    )
+    assert "📎 Файлы" in message.text
+    assert message.reply_markup is not None
 
 
 async def test_open_detail_cleans_up_previous_album(session) -> None:
@@ -199,3 +208,43 @@ async def test_open_detail_cleans_up_previous_album(session) -> None:
         if type(call).__name__ == "DeleteMessage"
     ]
     assert first_album_ids.issubset(deleted)
+
+
+async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
+    _, service, hw = await _seed_homework(session, attachments=2)
+    detail = await service.get_detail(hw)
+    deleteable = {item.id for item in detail.attachments}
+    text, markup = _detail_payload(
+        hw, detail, can_modify=True, can_add_files=True, deleteable_attachment_ids=deleteable
+    )
+    rows = markup.inline_keyboard
+    assert any(btn.text == "✏️ Изменить" for btn in rows[0])
+    assert any(btn.text == "🗑 Удалить" for btn in rows[0])
+    assert len(rows[0]) == 2
+    delete_rows = [
+        row
+        for row in rows
+        if any(
+            btn.callback_data is not None
+            and btn.callback_data.startswith(HW_DELETE_FILE)
+            for btn in row
+        )
+    ]
+    assert len(delete_rows) == 1
+    assert len(delete_rows[0]) == 2
+    back = rows[-1][0]
+    assert back.text == "🔙 К списку"
+    assert back.callback_data == f"{DETAIL_BACK}{hw.id}"
+    assert "🔗" not in text
+    assert "📎 Файлы" in text
+
+
+def test_card_files_collapsed_to_single_line() -> None:
+    text = build_homework_card(
+        subject="Математика",
+        title="Задачи",
+        deadline=date(2026, 9, 25),
+        attachment_lines=["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"],
+        attachment_limit=10,
+    )
+    assert "📎 Файлы (5/10): a.pdf · b.pdf · c.pdf · и ещё 2" in text
