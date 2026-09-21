@@ -256,8 +256,10 @@ async def on_subject_pick(
         await _render_preview_message(message, state)
         await query.answer()
         return
-    await state.set_state(HomeworkCreation.title)
-    await message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
+    await state.set_state(HomeworkCreation.deadline)
+    await message.edit_text(
+        DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
+    )
     await query.answer()
 
 
@@ -338,8 +340,10 @@ async def on_new_subject(
     elif (await state.get_data()).get("from_fields"):
         await _render_preview_message(message, state, answer=True)
     else:
-        await state.set_state(HomeworkCreation.title)
-        await message.answer(TITLE_PENDING, reply_markup=back_only_keyboard())
+        await state.set_state(HomeworkCreation.deadline)
+        await message.answer(
+            DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
+        )
 
 
 @router.message(StateFilter(HomeworkCreation.title))
@@ -369,8 +373,8 @@ async def on_description(message: Message, state: FSMContext) -> None:
     if (await state.get_data()).get("from_fields"):
         await _render_preview_message(message, state, answer=True)
         return
-    await state.set_state(HomeworkCreation.deadline)
-    await message.answer(DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today()))
+    await state.set_state(HomeworkCreation.attachment)
+    await message.answer(ATTACH_PENDING, reply_markup=attachment_keyboard(False))
 
 
 @router.callback_query(
@@ -452,8 +456,8 @@ async def on_calendar(
                     await state.clear()
                     await query.answer()
                     return
-    await state.set_state(HomeworkCreation.attachment)
-    await query.message.edit_text(ATTACH_PENDING, reply_markup=attachment_keyboard(False))
+    await state.set_state(HomeworkCreation.title)
+    await query.message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
     await query.answer()
 
 
@@ -747,9 +751,9 @@ async def on_skip(
             await _render_preview_message(query.message, state)
             await query.answer()
             return
-        await state.set_state(HomeworkCreation.deadline)
+        await state.set_state(HomeworkCreation.attachment)
         await query.message.edit_text(
-            DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
+            ATTACH_PENDING, reply_markup=attachment_keyboard(False)
         )
         await query.answer()
         return
@@ -842,15 +846,21 @@ async def on_flow_cancel(
             await query.answer()
             return
         if state_name == HomeworkCreation.title.state:
-            await render_subject_picker(query, bot, session, user, state)
+            deadline = data.get("deadline")
+            cursor = (
+                date.fromisoformat(str(deadline))
+                if deadline
+                else bot_today()
+            )
+            await state.set_state(HomeworkCreation.deadline)
+            await message.edit_text(
+                DEADLINE_PENDING, reply_markup=build_calendar_markup(cursor)
+            )
         elif state_name == HomeworkCreation.description.state:
             await state.set_state(HomeworkCreation.title)
             await message.edit_text(TITLE_PENDING, reply_markup=back_only_keyboard())
         elif state_name == HomeworkCreation.deadline.state:
-            await state.set_state(HomeworkCreation.description)
-            await message.edit_text(
-                DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard()
-            )
+            await render_subject_picker(query, bot, session, user, state)
         elif state_name == HomeworkCreation.attachment.state:
             if data.get("preview"):
                 await state.update_data(preview=False)
@@ -859,15 +869,9 @@ async def on_flow_cancel(
                     ATTACH_PENDING, reply_markup=attachment_keyboard(has)
                 )
             else:
-                deadline = data.get("deadline")
-                cursor = (
-                    date.fromisoformat(str(deadline))
-                    if deadline
-                    else bot_today()
-                )
-                await state.set_state(HomeworkCreation.deadline)
+                await state.set_state(HomeworkCreation.description)
                 await message.edit_text(
-                    DEADLINE_PENDING, reply_markup=build_calendar_markup(cursor)
+                    DESCRIPTION_PENDING, reply_markup=skip_or_cancel_keyboard()
                 )
         await query.answer()
         return
