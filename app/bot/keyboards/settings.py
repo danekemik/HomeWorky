@@ -12,7 +12,9 @@ SET_MEMBER_PAGE = "set:mpage:"  # set:mpage:{group_id}:{offset}
 SET_MEMBER_REMOVE = "set:rm:"  # set:rm:{group_id}:{user_id}
 SET_MEMBER_REMOVE_CONFIRM = "set:rmc:"  # set:rmc:{group_id}:{user_id}
 SET_CODE_ROTATE = "set:code:"  # set:code:{group_id}
+SET_RENAME_GROUP = "set:rnm:"  # set:rnm:{group_id}
 SET_NAME = "set:name"
+SET_NOOP = "set:noop"
 
 PAGE_SIZE_MEMBERS = 10
 
@@ -42,6 +44,9 @@ def admin_group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
 def management_keyboard(group_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👥 Участники", callback_data=f"{SET_MEMBERS}{group_id}")
+    builder.button(
+        text="✏️ Изменить название", callback_data=f"{SET_RENAME_GROUP}{group_id}"
+    )
     builder.button(text="🔄 Новый код", callback_data=f"{SET_CODE_ROTATE}{group_id}")
     builder.button(text="🔙 Выбор группы", callback_data=SET_MANAGE)
     builder.adjust(1)
@@ -58,7 +63,7 @@ def members_keyboard(
     for user_id, label in members:
         builder.button(
             text=f"👤 {label}",
-            callback_data="set:noop",
+            callback_data=SET_NOOP,
         )
         builder.button(
             text="🗑",

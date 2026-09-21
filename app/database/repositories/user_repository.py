@@ -13,6 +13,13 @@ class UserRepository(BaseRepository[User]):
         stmt = select(User).where(User.telegram_id == telegram_id)
         return await self._session.scalar(stmt)
 
+    async def get_many(self, ids: set[int]) -> dict[int, User]:
+        if not ids:
+            return {}
+        stmt = select(User).where(User.id.in_(ids))
+        users = (await self._session.scalars(stmt)).all()
+        return {user.id: user for user in users}
+
     async def get_or_create(self, telegram_id: int, **attrs: object) -> User:
         user = await self.get_by_telegram_id(telegram_id)
         if user is not None:

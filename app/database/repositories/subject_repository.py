@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Subject
@@ -18,9 +18,14 @@ class SubjectRepository(BaseRepository[Subject]):
         return list((await self._session.scalars(stmt)).all())
 
     async def get_by_group_and_name(self, group_id: int, name: str) -> Subject | None:
-        stmt = select(Subject).where(
-            Subject.group_id == group_id,
-            Subject.name == name,
+        stmt = (
+            select(Subject)
+            .where(
+                Subject.group_id == group_id,
+                func.lower(Subject.name) == name.strip().lower(),
+            )
+            .order_by(Subject.id)
+            .limit(1)
         )
         return await self._session.scalar(stmt)
 

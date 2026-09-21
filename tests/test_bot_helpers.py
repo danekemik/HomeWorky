@@ -2,9 +2,10 @@ from datetime import date
 
 from aiogram.types import Document, Message, PhotoSize, User
 from app.bot.calendar import build_calendar_markup
-from app.bot.formats import esc
+from app.bot.formats import esc, safe_int
 from app.bot.handlers.homework import _collect_attachment
 from app.database.models import AttachmentType
+from app.dates import russian_month_name_short
 
 
 def _message(**fields: object) -> Message:
@@ -62,3 +63,18 @@ def test_esc_handles_html_chars() -> None:
     assert esc("Math <3 & stuff > ok") == "Math &lt;3 &amp; stuff &gt; ok"
     assert esc(None) == ""
     assert esc("plain text") == "plain text"
+
+
+def test_safe_int_parses_and_rejects_bad_values() -> None:
+    assert safe_int("42") == 42
+    assert safe_int("-7") == -7
+    assert safe_int(None) is None
+    assert safe_int("abc") is None
+    assert safe_int("") is None
+    assert safe_int("12abc") is None
+
+
+def test_russian_month_name_short_forms() -> None:
+    assert russian_month_name_short(1) == "янв."
+    assert russian_month_name_short(9) == "сент."
+    assert russian_month_name_short(12) == "дек."

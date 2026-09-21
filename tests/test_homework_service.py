@@ -242,3 +242,61 @@ async def test_non_member_is_not_member(session) -> None:
         555, username="outsider", first_name="Кто-то"
     )
     assert await HomeworkService(session).is_member(outsider, group.id) is False
+
+
+async def test_create_homework_handles_race_integrity_error(
+    session, monkeypatch
+) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    deadline = date(2026, 9, 25)
+    await service.create_homework(
+        group_id=group.id,
+        subject_id=subject.id,
+        author_id=owner.id,
+        title="Первая",
+        deadline=deadline,
+    )
+
+    real = HomeworkService.find_by_subject_and_date
+    calls = {"n": 0}
+
+    async def _fake(self, group_id, subject_id, day):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return await real(self, group_id, subject_id, day)
+
+    monkeypatch.setattr(HomeworkService, "find_by_subject_and_date", _fake)
+    with pytest.raises(HomeworkExistsError):
+        await service.create_homework(
+            group_id=group.id,
+            subject_id=subject.id,
+            author_id=owner.id,
+            title="Дубликат",
+            deadline=deadline,
+        )
+    assert calls["n"] >= 2
+
+
+async def test_create_subject_is_idempotent(session) -> None:
+    group, _owner, _other, _admin, subject = await _seed(session)
+    service = HomeworkService(session)
+    same = await service.create_subject(group.id, "  Математика ")
+    assert same.id == subject.id
+    assert await service.subject_by_name(group.id, "МАТЕМАТИКА") is not None
+
+
+async def test_pagination_and_counts(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    today = date(2026, 9, 19)
+    service = HomeworkService(session)
+    for offset in range(5):
+        await _make_hw(session, group, subject, owner, today + timedelta(days=offset))
+    assert await service.count_active(group.id, today) == 5
+    first = await service.list_active(group.id, today, limit=2, offset=0)
+    second = await service.list_active(group.id, today, limit=2, offset=2)
+    assert [hw.id for hw in first] == sorted(hw.id for hw in first)
+    assert len(first) == 2
+    assert len(second) == 2
+    assert {hw.id for hw in first}.isdisjoint({hw.id for hw in second})

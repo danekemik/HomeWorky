@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import (
 from app.config import settings
 
 
-def _enable_sqlite_foreign_keys(
-    dbapi_connection: object, _connection_record: object
-) -> None:
+def _setup_sqlite(dbapi_connection: object, _connection_record: object) -> None:
+    """SQLite: включаем внешние ключи и Unicode-aware LOWER (как в PostgreSQL)."""
+    dbapi_connection.create_function(  # type: ignore[attr-defined]
+        "lower", 1, lambda value: value.lower() if isinstance(value, str) else value
+    )
     cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
@@ -28,7 +30,7 @@ class Database:
             event.listen(
                 self._engine.sync_engine,
                 "connect",
-                _enable_sqlite_foreign_keys,
+                _setup_sqlite,
             )
         self._session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self._engine,

@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.calendar import build_calendar_markup
 from app.bot.callbacks import (
-    FILE_SEND,
     HW_ADD_FILES,
     HW_DELETE,
     HW_DELETE_CONFIRM,
@@ -22,7 +21,13 @@ from app.bot.callbacks import (
 )
 from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
-from app.bot.formats import bot_today, build_homework_card, esc, format_homework_label
+from app.bot.formats import (
+    bot_today,
+    build_homework_card,
+    esc,
+    format_homework_label,
+    safe_int,
+)
 from app.bot.keyboards.homework import (
     attachment_keyboard,
     back_only_keyboard,
@@ -41,6 +46,7 @@ from app.bot.messages import NO_GROUP_TEXT
 from app.bot.render import edit_or_resend
 from app.bot.states.homework import HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
+from app.dates import russian_month_name_short
 from app.services.homework_service import (
     AttachmentInfo,
     HomeworkDetail,
@@ -49,21 +55,6 @@ from app.services.homework_service import (
 )
 
 router = Router(name="views")
-
-_MONTHS_RU = (
-    "янв.",
-    "февр.",
-    "марта",
-    "апр.",
-    "мая",
-    "июня",
-    "июля",
-    "авг.",
-    "сент.",
-    "окт.",
-    "нояб.",
-    "дек.",
-)
 
 _CATEGORY_TITLES = {
     "past": "📜 Прошедшие задания (за неделю)",
@@ -75,7 +66,7 @@ EMPTY_LINE = "  — заданий нет"
 
 
 def _date_ru(day: date) -> str:
-    return f"{day.day} {_MONTHS_RU[day.month - 1]}"
+    return f"{day.day} {russian_month_name_short(day.month)}"
 
 
 def _homework_label(homework: Homework, subject_names: dict[int, str]) -> str:
@@ -89,12 +80,31 @@ async def _list_homeworks(
     category: str,
     author_id: int,
     today: date,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Homework]:
     if category == "past":
-        return await service.list_past(group_id, today)
+        return await service.list_past(group_id, today, limit=limit, offset=offset)
     if category == "mine":
-        return await service.list_created_by(group_id, author_id)
-    return await service.list_active(group_id, today)
+        return await service.list_created_by(
+            group_id, author_id, limit=limit, offset=offset
+        )
+    return await service.list_active(group_id, today, limit=limit, offset=offset)
+
+
+async def _count_homeworks(
+    service: HomeworkService,
+    group_id: int,
+    category: str,
+    author_id: int,
+    today: date,
+) -> int:
+    if category == "past":
+        return await service.count_past(group_id, today)
+    if category == "mine":
+        return await service.count_created_by(group_id, author_id)
+    return await service.count_active(group_id, today)
 
 
 def _detail_payload(
@@ -186,7 +196,7 @@ async def _open_detail(
     )
     attachments = await service.attachments_for(homework)
     if not attachments:
-        await message.edit_text(text, reply_markup=markup)
+        await edit_or_resend(message, text, markup)
         return
     chat_id = message.chat.id
     try:
@@ -371,16 +381,23 @@ async def _render_category_list(
         return
     service = HomeworkService(session)
     today = bot_today()
-    items = await _list_homeworks(service, group.id, category, user.id, today)
+    total = await _count_homeworks(service, group.id, category, user.id, today)
+    items = await _list_homeworks(
+        service,
+        group.id,
+        category,
+        user.id,
+        today,
+        limit=PAGE_SIZE,
+        offset=page * PAGE_SIZE,
+    )
     subject_names = await service.subject_names(group.id, items)
-    start = page * PAGE_SIZE
-    chunk = items[start : start + PAGE_SIZE]
     rows = [
-        (hw.id, _homework_label(hw, subject_names)) for hw in chunk
+        (hw.id, _homework_label(hw, subject_names)) for hw in items
     ]
-    total_pages = max(1, (len(items) + PAGE_SIZE - 1) // PAGE_SIZE)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     title = _CATEGORY_TITLES.get(category, "🗂 Все задания")
-    text = f"{title}\n\nСтраница {page + 1} из {total_pages} · всего {len(items)}"
+    text = f"{title}\n\nСтраница {page + 1} из {total_pages} · всего {total}"
     if not rows:
         text += "\n\n" + EMPTY_LINE
     markup = homework_list_keyboard(
@@ -388,7 +405,7 @@ async def _render_category_list(
         category,
         page,
         has_prev=page > 0,
-        has_next=start + PAGE_SIZE < len(items),
+        has_next=(page + 1) * PAGE_SIZE < total,
     )
     await query.message.edit_text(text, reply_markup=markup)
     await query.answer()
@@ -462,7 +479,10 @@ async def on_homework_detail(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data[len(HW_DETAIL):])
+    homework_id = safe_int(query.data[len(HW_DETAIL):])
+    if homework_id is None:
+        await query.answer()
+        return
     group = await resolve_group(bot, session, user, query.message.chat, state)
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
@@ -490,7 +510,10 @@ async def on_add_files(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data[len(HW_ADD_FILES):])
+    homework_id = safe_int(query.data[len(HW_ADD_FILES):])
+    if homework_id is None:
+        await query.answer()
+        return
     group = await resolve_group(bot, session, user, query.message.chat, state)
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
@@ -589,7 +612,10 @@ async def on_edit_homework(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data[len(HW_EDIT):])
+    homework_id = safe_int(query.data[len(HW_EDIT):])
+    if homework_id is None:
+        await query.answer()
+        return
     group = await resolve_group(
         bot, session, user, query.message.chat, state
     )
@@ -879,7 +905,10 @@ async def on_delete_homework(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data[len(HW_DELETE):])
+    homework_id = safe_int(query.data[len(HW_DELETE):])
+    if homework_id is None:
+        await query.answer()
+        return
     group = await resolve_group(bot, session, user, query.message.chat, state)
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
@@ -913,7 +942,10 @@ async def on_delete_confirm(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = int(query.data[len(HW_DELETE_CONFIRM):])
+    homework_id = safe_int(query.data[len(HW_DELETE_CONFIRM):])
+    if homework_id is None:
+        await query.answer()
+        return
     group = await resolve_group(bot, session, user, query.message.chat, state)
     if group is None:
         await query.answer(NO_GROUP_TEXT, show_alert=True)
@@ -934,56 +966,3 @@ async def on_delete_confirm(
         query.message, "✅ Задание удалено. Нажми /menu для возврата."
     )
     await query.answer()
-
-
-@router.callback_query(CallbackDataPrefix(FILE_SEND))
-async def on_send_file(
-    query: CallbackQuery,
-    bot: Bot,
-    session: AsyncSession,
-    user: User,
-    state: FSMContext,
-) -> None:
-    if (
-        not query.data
-        or not isinstance(query.message, Message)
-        or query.message.chat is None
-    ):
-        await query.answer()
-        return
-    payload = query.data[len(FILE_SEND):]
-    homework_id_raw, attachment_id_raw = payload.split(":")
-    homework_id = int(homework_id_raw)
-    attachment_id = int(attachment_id_raw)
-    group = await resolve_group(bot, session, user, query.message.chat, state)
-    if group is None:
-        await query.answer(NO_GROUP_TEXT, show_alert=True)
-        return
-    service = HomeworkService(session)
-    homework = await service.get_for_group(homework_id, group.id)
-    if homework is None:
-        await query.answer("Задание не найдено.", show_alert=True)
-        return
-    attachment = next(
-        (
-            item
-            for item in await service.attachments_for(homework)
-            if item.id == attachment_id
-        ),
-        None,
-    )
-    if attachment is None:
-        await query.answer("Файл больше недоступен.", show_alert=True)
-        return
-    chat_id = query.message.chat.id
-    try:
-        if attachment.file_type == AttachmentType.PHOTO:
-            await bot.send_photo(chat_id, attachment.telegram_file_id)
-        else:
-            await bot.send_document(
-                chat_id, attachment.telegram_file_id, caption=attachment.file_name
-            )
-    except Exception:
-        await query.answer("Не удалось скачать файл.", show_alert=True)
-        return
-    await query.answer("⬇️ Вот файл.")

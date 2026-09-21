@@ -5,21 +5,7 @@ from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.repositories import HomeworkRepository
-
-_MONTHS_RU = (
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-)
+from app.dates import russian_month_name
 
 
 @dataclass(frozen=True)
@@ -48,7 +34,7 @@ class NotificationService:
         lines = [
             "🔔 ДЕДЛАЙНЫ НА ЗАВТРА",
             "",
-            f"📅 {target.day} {_MONTHS_RU[target.month - 1]}",
+            f"📅 {target.day} {russian_month_name(target.month)}",
             "",
         ]
         for item in items:

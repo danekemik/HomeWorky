@@ -10,7 +10,7 @@ from app.bot.callbacks import MENU_BACK
 from app.bot.context import select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.filters.chat_type import ChatTypeFilter
-from app.bot.formats import esc
+from app.bot.formats import esc, safe_int
 from app.bot.keyboards.homework import back_only_keyboard
 from app.bot.keyboards.menu import (
     CB_JOIN_PICK,
@@ -104,7 +104,10 @@ async def on_pick_group(
     ):
         await query.answer()
         return
-    group_id = int(raw.split(":", 1)[1])
+    group_id = safe_int(raw.split(":", 1)[1])
+    if group_id is None:
+        await query.answer()
+        return
     service = GroupService(session)
     group = await GroupRepository(session).get(group_id)
     if group is None:
@@ -221,7 +224,10 @@ async def on_join_pick(
     if not query.data or not isinstance(message, Message):
         await query.answer()
         return
-    group_id = int(query.data[len(CB_JOIN_PICK):])
+    group_id = safe_int(query.data[len(CB_JOIN_PICK):])
+    if group_id is None:
+        await query.answer()
+        return
     await state.set_state(GroupFlow.join_code)
     await state.update_data(join_group_id=group_id)
     await message.edit_text(JOIN_CODE_PENDING, reply_markup=back_only_keyboard())

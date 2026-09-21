@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,10 +20,11 @@ class GroupRepository(BaseRepository[Group]):
         stmt = select(Group).where(Group.invite_code == code)
         return await self._session.scalar(stmt)
 
-    async def name_exists(self, name: str) -> bool:
-        names = (await self._session.scalars(select(Group.name))).all()
-        needle = name.lower()
-        return any(existing.lower() == needle for existing in names)
+    async def name_exists(self, name: str, *, exclude_id: int | None = None) -> bool:
+        stmt = select(Group.id).where(func.lower(Group.name) == name.strip().lower())
+        if exclude_id is not None:
+            stmt = stmt.where(Group.id != exclude_id)
+        return (await self._session.scalar(stmt.limit(1))) is not None
 
     async def create(
         self,

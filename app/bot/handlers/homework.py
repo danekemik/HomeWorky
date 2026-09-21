@@ -827,6 +827,18 @@ async def on_flow_cancel(
         await state.clear()
         await query.answer()
         return
+    if state_name == SettingsFlow.rename_group.state:
+        from app.bot.handlers.settings import render_management
+
+        data = await state.get_data()
+        group_id = data.get("rename_group_id")
+        await state.clear()
+        if group_id is not None:
+            await render_management(query, session, user, int(group_id))
+            return
+        await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
 
     if _is_base_creation(state_name):
         data = await state.get_data()

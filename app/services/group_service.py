@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram.enums import ChatType
 from aiogram.types import Chat
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -14,9 +15,26 @@ _GROUP_CHAT_TYPES = frozenset({ChatType.GROUP, ChatType.SUPERGROUP})
 _LETTERS = "ABCDEFGHJKMNPQRSTUVWXYZ"
 _DIGITS = "23456789"
 
+_GROUP_NAME_MAX = 64
+
 
 class GroupError(Exception):
     """Ошибка бизнес-логики групп (передаётся пользователю дословно)."""
+
+
+def _clean_name(name: str) -> str:
+    return " ".join(name.split()).strip()
+
+
+def validate_group_name(name: str) -> str:
+    clean = _clean_name(name)
+    if not clean:
+        raise GroupError("Название группы не может быть пустым.")
+    if len(clean) > _GROUP_NAME_MAX:
+        raise GroupError(
+            f"Название слишком длинное (максимум {_GROUP_NAME_MAX} символа)."
+        )
+    return clean
 
 
 def normalize_code(raw: str) -> str:
@@ -41,6 +59,7 @@ class GroupService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._groups = GroupRepository(session)
+        self._session = session
 
     async def _unique_code(self) -> str:
         for _ in range(10):
@@ -50,22 +69,40 @@ class GroupService:
         raise GroupError("Не удалось сгенерировать уникальный код. Попробуй ещё раз.")
 
     async def create_group(self, *, creator: User, name: str) -> Group:
-        clean = " ".join(name.split()).strip()
-        if not clean:
-            raise GroupError("Название группы не может быть пустым.")
-        if len(clean) > 64:
-            raise GroupError("Название слишком длинное (максимум 64 символа).")
+        clean = validate_group_name(name)
         if await self._groups.name_exists(clean):
             raise GroupError("Группа с таким названием уже существует.")
-        group = await self._groups.create(
-            name=clean,
-            created_by=creator.id,
-            invite_code=await self._unique_code(),
-            invite_code_expires_at=_new_expiry(),
-        )
+        try:
+            async with self._session.begin_nested():
+                group = await self._groups.create(
+                    name=clean,
+                    created_by=creator.id,
+                    invite_code=await self._unique_code(),
+                    invite_code_expires_at=_new_expiry(),
+                )
+        except IntegrityError as exc:
+            if await self._groups.name_exists(clean):
+                raise GroupError("Группа с таким названием уже существует.") from exc
+            raise
         await self._groups.upsert_membership(
             group.id, creator.id, MemberRole.ADMIN
         )
+        return group
+
+    async def rename_group(self, group: Group, name: str) -> Group:
+        clean = validate_group_name(name)
+        if clean == group.name:
+            return group
+        if await self._groups.name_exists(clean, exclude_id=group.id):
+            raise GroupError("Группа с таким названием уже существует.")
+        try:
+            async with self._session.begin_nested():
+                group.name = clean
+                await self._session.flush()
+        except IntegrityError as exc:
+            if await self._groups.name_exists(clean, exclude_id=group.id):
+                raise GroupError("Группа с таким названием уже существует.") from exc
+            raise
         return group
 
     @staticmethod

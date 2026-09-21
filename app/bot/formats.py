@@ -10,6 +10,14 @@ def esc(value: str | None) -> str:
     return _escape(value or "", quote=False)
 
 
+def safe_int(value: str | None) -> int | None:
+    """Возвращает int или None вместо исключения на битых callback_data."""
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def bot_today() -> date:
     return datetime.now(settings.tz).date()
 

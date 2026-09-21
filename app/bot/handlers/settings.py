@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.filters.callback import CallbackDataPrefix
-from app.bot.formats import esc
+from app.bot.formats import esc, safe_int
 from app.bot.keyboards.homework import back_only_keyboard
 from app.bot.keyboards.menu import CB_SETTINGS
 from app.bot.keyboards.settings import (
@@ -20,6 +20,8 @@ from app.bot.keyboards.settings import (
     SET_MEMBER_REMOVE_CONFIRM,
     SET_MEMBERS,
     SET_NAME,
+    SET_NOOP,
+    SET_RENAME_GROUP,
     admin_group_picker_keyboard,
     management_keyboard,
     member_remove_confirm_keyboard,
@@ -206,6 +208,71 @@ async def on_code_rotate(
         return
     await service.rotate_invite_code(group)
     await render_management(query, session, user, group_id)
+
+
+@router.callback_query(CallbackDataPrefix(SET_NOOP))
+async def on_noop(query: CallbackQuery) -> None:
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_RENAME_GROUP))
+async def on_rename_group_request(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    group_id = safe_int(query.data[len(SET_RENAME_GROUP):])
+    if group_id is None:
+        await query.answer()
+        return
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None or not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    await state.set_state(SettingsFlow.rename_group)
+    await state.update_data(rename_group_id=group_id)
+    await query.message.edit_text(
+        f"✏️ Новое название для группы «{esc(group.name)}».\n\n"
+        "Напиши название (до 64 символов):",
+        reply_markup=back_only_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(StateFilter(SettingsFlow.rename_group))
+async def on_rename_group_input(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    group_id = data.get("rename_group_id")
+    service = GroupService(session)
+    group = (
+        await GroupRepository(session).get(group_id)
+        if group_id is not None
+        else None
+    )
+    if group is None or not await service.is_admin(group, user):
+        await state.clear()
+        await message.answer("Группа не найдена или доступ запрещён.")
+        return
+    try:
+        await service.rename_group(group, message.text or "")
+    except GroupError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ Группа переименована в «{esc(group.name)}».",
+        reply_markup=management_keyboard(group.id),
+    )
 
 
 @router.callback_query(CallbackDataPrefix(SET_MEMBERS))

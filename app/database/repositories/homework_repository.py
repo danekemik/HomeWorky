@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -63,7 +63,13 @@ class HomeworkRepository(BaseRepository[Homework]):
         return list((await self._session.scalars(stmt)).all())
 
     async def list_from_date(
-        self, group_id: int, start: date, end: date | None = None
+        self,
+        group_id: int,
+        start: date,
+        end: date | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Homework]:
         stmt = (
             select(Homework)
@@ -75,7 +81,22 @@ class HomeworkRepository(BaseRepository[Homework]):
         )
         if end is not None:
             stmt = stmt.where(Homework.deadline <= end)
+        if offset:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list((await self._session.scalars(stmt)).all())
+
+    async def count_from_date(
+        self, group_id: int, start: date, end: date | None = None
+    ) -> int:
+        stmt = select(func.count(Homework.id)).where(
+            Homework.group_id == group_id,
+            Homework.deadline >= start,
+        )
+        if end is not None:
+            stmt = stmt.where(Homework.deadline <= end)
+        return int((await self._session.scalar(stmt)) or 0)
 
     async def list_due_on(self, group_id: int, target: date) -> list[Homework]:
         stmt = (
@@ -89,7 +110,12 @@ class HomeworkRepository(BaseRepository[Homework]):
         return list((await self._session.scalars(stmt)).all())
 
     async def list_created_by(
-        self, group_id: int, author_id: int
+        self,
+        group_id: int,
+        author_id: int,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Homework]:
         stmt = (
             select(Homework)
@@ -99,6 +125,10 @@ class HomeworkRepository(BaseRepository[Homework]):
             )
             .order_by(Homework.deadline, Homework.id)
         )
+        if offset:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list((await self._session.scalars(stmt)).all())
 
     async def count_for_group(self, group_id: int) -> int:
@@ -111,6 +141,28 @@ class HomeworkRepository(BaseRepository[Homework]):
             Homework.author_id == author_id,
         )
         return int((await self._session.scalar(stmt)) or 0)
+
+    async def stats(
+        self, group_id: int, user_id: int, today: date, tomorrow: date
+    ) -> dict[str, int]:
+        """Все счётчики одним запросом (вместо пяти отдельных)."""
+        stmt = select(
+            func.count(Homework.id),
+            func.count(case((Homework.author_id == user_id, Homework.id))),
+            func.count(case((Homework.deadline >= today, Homework.id))),
+            func.count(case((Homework.deadline == today, Homework.id))),
+            func.count(case((Homework.deadline == tomorrow, Homework.id))),
+        ).where(Homework.group_id == group_id)
+        total, created_by_me, active, due_today, due_tomorrow = (
+            await self._session.execute(stmt)
+        ).one()
+        return {
+            "total": int(total),
+            "created_by_me": int(created_by_me),
+            "active": int(active),
+            "today": int(due_today),
+            "tomorrow": int(due_tomorrow),
+        }
 
     async def delete_expired(self, before: date) -> int:
         ids_stmt = select(Homework.id).where(Homework.deadline < before)
@@ -174,6 +226,11 @@ class HomeworkRepository(BaseRepository[Homework]):
             Attachment.homework_id == homework_id
         )
         return int((await self._session.scalar(stmt)) or 0)
+
+    async def lock(self, homework_id: int) -> None:
+        """Блокирует строку задания на время транзакции (защита от гонок)."""
+        stmt = select(Homework.id).where(Homework.id == homework_id).with_for_update()
+        await self._session.execute(stmt)
 
     async def add_link(
         self, homework_id: int, *, url: str, title: str | None = None

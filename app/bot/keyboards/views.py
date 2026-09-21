@@ -2,10 +2,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.callbacks import (
-    HW_DELETE,
     HW_DELETE_CONFIRM,
     HW_DETAIL,
-    HW_EDIT,
     HW_EDIT_FIELD,
     MENU_BACK,
     PAGE,
@@ -42,17 +40,6 @@ def homework_list_keyboard(
     if has_next:
         builder.button(text="Вперёд ▶️", callback_data=f"{PAGE}{category}:{page + 1}")
     builder.adjust(1)
-    return builder.as_markup()
-
-
-def homework_detail_keyboard(homework_id: int, can_modify: bool) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    if can_modify:
-        builder.button(text="✏️ Изменить", callback_data=f"{HW_EDIT}{homework_id}")
-        builder.button(text="🗑 Удалить", callback_data=f"{HW_DELETE}{homework_id}")
-    builder.button(text="🔙 В меню", callback_data=MENU_BACK)
-    if can_modify:
-        builder.adjust(2, 1)
     return builder.as_markup()
 
 

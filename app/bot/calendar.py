@@ -5,36 +5,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.bot.callbacks import CALENDAR, FLOW_CANCEL
 from app.config import settings
+from app.dates import month_nominative, russian_month_name
 
-_MONTHS_NOMINATIVE = (
-    "Январь",
-    "Февраль",
-    "Март",
-    "Апрель",
-    "Май",
-    "Июнь",
-    "Июль",
-    "Август",
-    "Сентябрь",
-    "Октябрь",
-    "Ноябрь",
-    "Декабрь",
-)
-
-_MONTHS_GENITIVE = (
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-)
+__all__ = ["build_calendar_markup", "russian_month_name"]
 
 
 def _nav_callback(year: int, month: int) -> str:
@@ -58,7 +31,7 @@ _ZJ = "\u200d"
 
 
 def _month_header(cursor: date) -> str:
-    label = f"{_MONTHS_NOMINATIVE[cursor.month - 1]} {cursor.year}"
+    label = f"{month_nominative(cursor.month)} {cursor.year}"
     pad = max(0, _TITLE_WIDTH - len(label))
     left, right = pad // 2, pad - pad // 2
     return f"{_ZJ}{' ' * left}{label}{' ' * right}{_ZJ}"
@@ -96,7 +69,3 @@ def build_calendar_markup(
     ]
     back = [InlineKeyboardButton(text="🔙 Назад", callback_data=FLOW_CANCEL)]
     return InlineKeyboardMarkup(inline_keyboard=[top, *grid, back])
-
-
-def russian_month_name(month: int) -> str:
-    return _MONTHS_GENITIVE[month - 1]

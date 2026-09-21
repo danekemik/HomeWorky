@@ -142,3 +142,40 @@ async def test_code_normalize_and_format_roundtrip(session) -> None:
     formatted = format_code("ab3d7x9f2k")
     assert formatted == "ab3d7-x9f2k"
     assert normalize_code(formatted) == "AB3D7X9F2K"
+
+
+async def test_rename_group_success(session) -> None:
+    creator = await _creator(session)
+    service = GroupService(session)
+    group = await service.create_group(creator=creator, name="Старое")
+    await service.rename_group(group, "  Новое название  ")
+    assert group.name == "Новое название"
+
+
+async def test_rename_group_rejects_empty_and_too_long(session) -> None:
+    creator = await _creator(session)
+    service = GroupService(session)
+    group = await service.create_group(creator=creator, name="Группа")
+    with pytest.raises(GroupError):
+        await service.rename_group(group, "   ")
+    with pytest.raises(GroupError):
+        await service.rename_group(group, "я" * 65)
+    assert group.name == "Группа"
+
+
+async def test_rename_group_rejects_duplicate_name(session) -> None:
+    creator = await _creator(session)
+    service = GroupService(session)
+    first = await service.create_group(creator=creator, name="Первая")
+    await service.create_group(creator=creator, name="Вторая")
+    with pytest.raises(GroupError):
+        await service.rename_group(first, "вторая")
+    assert first.name == "Первая"
+
+
+async def test_rename_group_allows_same_name_case_change(session) -> None:
+    creator = await _creator(session)
+    service = GroupService(session)
+    group = await service.create_group(creator=creator, name="ВКБ-22")
+    await service.rename_group(group, "вкб-22")
+    assert group.name == "вкб-22"

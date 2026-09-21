@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -89,14 +90,25 @@ class HomeworkService:
         exists = await self.find_by_subject_and_date(group_id, subject_id, deadline)
         if exists is not None:
             raise HomeworkExistsError
-        return await self._repo.create(
-            group_id=group_id,
-            subject_id=subject_id,
-            author_id=author_id,
-            title=title,
-            deadline=deadline,
-            description=description,
-        )
+        try:
+            async with self._session.begin_nested():
+                return await self._repo.create(
+                    group_id=group_id,
+                    subject_id=subject_id,
+                    author_id=author_id,
+                    title=title,
+                    deadline=deadline,
+                    description=description,
+                )
+        except IntegrityError as exc:
+            if (
+                await self.find_by_subject_and_date(
+                    group_id, subject_id, deadline
+                )
+                is not None
+            ):
+                raise HomeworkExistsError from exc
+            raise
 
     async def get_for_group(self, homework_id: int, group_id: int) -> Homework | None:
         return await self._repo.get_for_group(homework_id, group_id)
@@ -147,15 +159,54 @@ class HomeworkService:
             group_id, tomorrow
         )
 
-    async def list_active(self, group_id: int, today: date) -> list[Homework]:
-        return await self._repo.list_from_date(group_id, today)
+    async def list_active(
+        self,
+        group_id: int,
+        today: date,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Homework]:
+        return await self._repo.list_from_date(
+            group_id, today, limit=limit, offset=offset
+        )
 
-    async def list_past(self, group_id: int, today: date) -> list[Homework]:
+    async def count_active(self, group_id: int, today: date) -> int:
+        return await self._repo.count_from_date(group_id, today)
+
+    async def list_past(
+        self,
+        group_id: int,
+        today: date,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Homework]:
         start = today - timedelta(days=7)
-        return await self._repo.list_from_date(group_id, start, today - timedelta(days=1))
+        return await self._repo.list_from_date(
+            group_id, start, today - timedelta(days=1), limit=limit, offset=offset
+        )
 
-    async def list_created_by(self, group_id: int, author_id: int) -> list[Homework]:
-        return await self._repo.list_created_by(group_id, author_id)
+    async def count_past(self, group_id: int, today: date) -> int:
+        start = today - timedelta(days=7)
+        return await self._repo.count_from_date(
+            group_id, start, today - timedelta(days=1)
+        )
+
+    async def list_created_by(
+        self,
+        group_id: int,
+        author_id: int,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Homework]:
+        return await self._repo.list_created_by(
+            group_id, author_id, limit=limit, offset=offset
+        )
+
+    async def count_created_by(self, group_id: int, author_id: int) -> int:
+        return await self._repo.count_created_by(group_id, author_id)
 
     async def list_all_for_group(self, group_id: int) -> list[Homework]:
         return await self._repo.list_for_group(group_id)
@@ -167,17 +218,21 @@ class HomeworkService:
         return await self._subjects.list_for_group(group_id)
 
     async def subject_by_name(self, group_id: int, name: str) -> Subject | None:
-        lowered = name.strip().lower()
-        for subject in await self.list_subjects(group_id):
-            if subject.name.strip().lower() == lowered:
-                return subject
-        return None
+        return await self._subjects.get_by_group_and_name(group_id, name)
 
     async def get_subject(self, subject_id: int) -> Subject | None:
         return await self._subjects.get(subject_id)
 
     async def create_subject(self, group_id: int, name: str) -> Subject:
-        return await self._subjects.create(group_id, name)
+        clean = name.strip()
+        try:
+            async with self._session.begin_nested():
+                return await self._subjects.create(group_id, clean)
+        except IntegrityError:
+            existing = await self._subjects.get_by_group_and_name(group_id, clean)
+            if existing is not None:
+                return existing
+            raise
 
     async def add_attachment(
         self,
@@ -188,6 +243,7 @@ class HomeworkService:
         file_name: str | None = None,
         author_id: int | None = None,
     ) -> Attachment:
+        await self._repo.lock(homework.id)
         if await self._repo.count_attachments(homework.id) >= self.MAX_ATTACHMENTS:
             raise HomeworkLimitError
         return await self._repo.add_attachment(
@@ -236,21 +292,24 @@ class HomeworkService:
 
     async def get_detail(self, homework: Homework) -> HomeworkDetail:
         subject = await self._repo.get_subject_name(homework)
-        author = await self._users.get(homework.author_id)
-        author_name = self._author_label(author)
-        attachments = [
+        attachments = await self._repo.attachments_for(homework.id)
+        author_ids = {homework.author_id} | {
+            item.author_id for item in attachments if item.author_id is not None
+        }
+        authors = await self._users.get_many(author_ids)
+        attachments_info = [
             AttachmentInfo(
                 id=item.id,
                 file_type=item.file_type,
                 file_name=item.file_name,
                 author_id=item.author_id,
                 author_name=(
-                    self._author_label(await self._users.get(item.author_id))
+                    self._author_label(authors.get(item.author_id))
                     if item.author_id is not None
                     else None
                 ),
             )
-            for item in await self._repo.attachments_for(homework.id)
+            for item in attachments
         ]
         links = [
             LinkInfo(url=link.url, title=link.title)
@@ -258,8 +317,8 @@ class HomeworkService:
         ]
         return HomeworkDetail(
             subject=subject,
-            author_name=author_name,
-            attachments=attachments,
+            author_name=self._author_label(authors.get(homework.author_id)),
+            attachments=attachments_info,
             links=links,
         )
 
@@ -288,17 +347,9 @@ class HomeworkService:
             )
 
     async def stats(self, group_id: int, user_id: int, today: date) -> dict[str, int]:
-        total = await self._repo.count_for_group(group_id)
-        created_by_me = await self._repo.count_created_by(group_id, user_id)
-        today_list, tomorrow_list = await self.nearest(group_id, today)
-        active = len(await self.list_active(group_id, today))
-        return {
-            "total": total,
-            "created_by_me": created_by_me,
-            "today": len(today_list),
-            "tomorrow": len(tomorrow_list),
-            "active": active,
-        }
+        return await self._repo.stats(
+            group_id, user_id, today, today + timedelta(days=1)
+        )
 
     @staticmethod
     def _author_label(author: User | None) -> str:
