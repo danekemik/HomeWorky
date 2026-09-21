@@ -12,6 +12,7 @@ SET_MEMBER_PAGE = "set:mpage:"  # set:mpage:{group_id}:{offset}
 SET_MEMBER_REMOVE = "set:rm:"  # set:rm:{group_id}:{user_id}
 SET_MEMBER_REMOVE_CONFIRM = "set:rmc:"  # set:rmc:{group_id}:{user_id}
 SET_CODE_ROTATE = "set:code:"  # set:code:{group_id}
+SET_NAME = "set:name"
 
 PAGE_SIZE_MEMBERS = 10
 
@@ -21,6 +22,7 @@ def settings_keyboard(has_admin_groups: bool) -> InlineKeyboardMarkup:
     if has_admin_groups:
         builder.button(text="🎛 Управление группой", callback_data=SET_MANAGE)
     builder.button(text="🔑 Присоединиться к группе", callback_data=CB_ONBOARD_JOIN)
+    builder.button(text="👤 Сменить имя", callback_data=SET_NAME)
     builder.button(text="🔙 В меню", callback_data=MENU_BACK)
     builder.adjust(1)
     return builder.as_markup()

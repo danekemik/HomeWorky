@@ -244,6 +244,8 @@ class HomeworkService:
     def _author_label(author: User | None) -> str:
         if author is None:
             return "?"
+        if author.display_name:
+            return author.display_name
         if author.first_name:
             return author.first_name
         return author.username or f"id{author.telegram_id}"

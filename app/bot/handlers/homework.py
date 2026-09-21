@@ -39,9 +39,10 @@ from app.bot.keyboards.homework import (
 from app.bot.keyboards.menu import CB_ADD_HOMEWORK, main_menu_keyboard
 from app.bot.keyboards.views import homework_edit_field_keyboard
 from app.bot.messages import NO_GROUP_TEXT
-from app.bot.states.group_flow import GroupFlow
+from app.bot.states.group_flow import GroupFlow, SettingsFlow
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
+from app.services.group_service import GroupService
 from app.services.homework_service import HomeworkDetail, HomeworkService
 
 router = Router(name="homework")
@@ -700,8 +701,23 @@ async def on_flow_cancel(
 
         await render_join_picker(query, session, user)
         return
+    if state_name == GroupFlow.join_name.state:
+        await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
     if state_name == GroupFlow.create_name.state:
         await _back_to_menu(message, bot, session, user, state)
+        await query.answer()
+        return
+    if state_name == SettingsFlow.change_name.state:
+        from app.bot.handlers.settings import SETTINGS_TEXT, settings_keyboard
+
+        admin_groups = await GroupService(session).admin_groups(user)
+        await message.edit_text(
+            SETTINGS_TEXT,
+            reply_markup=settings_keyboard(has_admin_groups=bool(admin_groups)),
+        )
+        await state.clear()
         await query.answer()
         return
 

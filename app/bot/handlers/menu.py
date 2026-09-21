@@ -153,12 +153,25 @@ async def on_create_group_name(
         await message.answer(str(exc))
         return
 
-    await state.clear()
     select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
-    human_code = format_code(group.invite_code)
+    if user.display_name:
+        await state.clear()
+        await _send_group_created(message, group)
+        return
+
+    await state.set_state(GroupFlow.join_name)
     await message.answer(
         f"🎉 Группа <b>«{esc(group.name)}»</b> создана!\n\n"
+        "Теперь расскажи, как к тебе обращаться:",
+        reply_markup=back_only_keyboard(),
+    )
+
+
+async def _send_group_created(message: Message, group: Group) -> None:
+    human_code = format_code(group.invite_code)
+    await message.answer(
+        f"Группа <b>«{esc(group.name)}»</b> готова!\n\n"
         f"🔑 Инвайт-код: <code>{human_code}</code>\n"
         "Отправь этот код в чат своей группы, чтобы участники могли присоединиться.\n\n"
         "Чтобы я присылал напоминания: добавь меня в групповой чат и напиши в нём:\n"
@@ -239,9 +252,41 @@ async def on_join_code(
     if error is not None:
         await message.answer(error)
         return
-    await state.clear()
     select_current_group(user, group.id)
     await state.update_data(current_group_id=group.id)
-    text, markup = await build_menu_payload(session=session, user=user, state=state)
-    await message.answer(f"✅ Ты в группе «{esc(group.name)}»!")
+    if user.display_name:
+        await state.clear()
+        text, markup = await build_menu_payload(session=session, user=user, state=state)
+        await message.answer(f"✅ Ты в группе «{esc(group.name)}»!")
+        await message.answer(text, reply_markup=markup)
+        return
+
+    await state.set_state(GroupFlow.join_name)
+    await message.answer(
+        f"✅ Ты в группе «{esc(group.name)}»!\n\n"
+        "Теперь расскажи, как к тебе обращаться:",
+        reply_markup=back_only_keyboard(),
+    )
+
+
+@router.message(StateFilter(GroupFlow.join_name))
+async def on_join_name(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    from app.services.user_service import UserNameError, UserService
+
+    service = UserService(session)
+    try:
+        name = await service.set_display_name(user, message.text or "")
+    except UserNameError as exc:
+        await message.answer(str(exc))
+        return
+    text, markup = await build_menu_payload(
+        session=session, user=user, state=state
+    )
+    await state.clear()
+    await message.answer(f"✅ Принято, {esc(name)}!")
     await message.answer(text, reply_markup=markup)

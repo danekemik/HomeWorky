@@ -1,11 +1,14 @@
 from datetime import datetime
 
 from aiogram import Router
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import esc
+from app.bot.keyboards.homework import back_only_keyboard
 from app.bot.keyboards.menu import CB_SETTINGS
 from app.bot.keyboards.settings import (
     PAGE_SIZE_MEMBERS,
@@ -16,15 +19,18 @@ from app.bot.keyboards.settings import (
     SET_MEMBER_REMOVE,
     SET_MEMBER_REMOVE_CONFIRM,
     SET_MEMBERS,
+    SET_NAME,
     admin_group_picker_keyboard,
     management_keyboard,
     member_remove_confirm_keyboard,
     members_keyboard,
     settings_keyboard,
 )
+from app.bot.states.group_flow import SettingsFlow
 from app.database.models import Group, User
 from app.database.repositories import GroupRepository
 from app.services.group_service import GroupError, GroupService, format_code
+from app.services.user_service import UserNameError, UserService
 
 router = Router(name="settings")
 
@@ -32,6 +38,8 @@ SETTINGS_TEXT = "⚙️ Настройки\n\nВыбери раздел:"
 
 
 def _user_label(user: User) -> str:
+    if user.display_name:
+        return user.display_name
     if user.first_name:
         return user.first_name
     if user.username:
@@ -72,6 +80,44 @@ async def on_settings(
         reply_markup=settings_keyboard(has_admin_groups=bool(admin_groups)),
     )
     await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_NAME))
+async def on_change_name(
+    query: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if not isinstance(query.message, Message):
+        await query.answer()
+        return
+    await state.set_state(SettingsFlow.change_name)
+    await query.message.edit_text(
+        "👤 Твоё имя в группе.\n\n"
+        "Как к тебе обращаться? Напиши имя на русском "
+        "(например, «Иван»). Это имя увидят участники групп, "
+        "где ты добавляешь домашние задания.",
+        reply_markup=back_only_keyboard(),
+    )
+    await query.answer()
+
+
+@router.message(StateFilter(SettingsFlow.change_name))
+async def on_change_name_input(
+    message: Message,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    service = UserService(session)
+    try:
+        name = await service.set_display_name(user, message.text or "")
+    except UserNameError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ Готово! Теперь к тебе обращаются как <b>{esc(name)}</b>."
+    )
 
 
 @router.callback_query(CallbackDataPrefix(SET_MANAGE))
