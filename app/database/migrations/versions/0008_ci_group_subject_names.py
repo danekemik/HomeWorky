@@ -51,6 +51,16 @@ def _deduplicate_groups(bind: sa.Connection) -> None:
                 {"keep": keep, "drop": drop},
             )
         bind.execute(
+            sa.text(
+                "UPDATE group_members AS t SET role = 'ADMIN' "
+                "WHERE t.group_id = :keep AND t.role <> 'ADMIN' AND EXISTS ("
+                "  SELECT 1 FROM group_members AS gm "
+                "  WHERE gm.group_id IN :drops AND gm.user_id = t.user_id "
+                "    AND gm.role = 'ADMIN')"
+            ).bindparams(sa.bindparam("drops", expanding=True)),
+            {"keep": keep, "drops": drops},
+        )
+        bind.execute(
             sa.text("DELETE FROM group_members WHERE group_id IN :drops").bindparams(
                 sa.bindparam("drops", expanding=True)
             ),
