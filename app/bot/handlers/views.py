@@ -1,9 +1,17 @@
 from datetime import date
 
 from aiogram import Bot, Router
+from aiogram.enums import ParseMode
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InputMediaDocument,
+    InputMediaPhoto,
+    MediaUnion,
+    Message,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.calendar import build_calendar_markup
@@ -45,7 +53,7 @@ from app.bot.keyboards.views import (
 from app.bot.messages import NO_GROUP_TEXT
 from app.bot.render import edit_or_resend
 from app.bot.states.homework import HomeworkEditField
-from app.database.models import AttachmentType, Homework, User
+from app.database.models import Attachment, AttachmentType, Homework, User
 from app.dates import russian_month_name_short
 from app.services.homework_service import (
     AttachmentInfo,
@@ -63,6 +71,55 @@ _CATEGORY_TITLES = {
 }
 
 EMPTY_LINE = "  — заданий нет"
+
+_ALBUM_MAX_ITEMS = 10
+_ACTION_HINT = "🔧 Действия с заданием:"
+
+# (chat_id, homework_id) -> id сообщений карточки (альбом + кнопки)
+_sent_detail_messages: dict[tuple[int, int], list[int]] = {}
+
+
+def _remember_detail(
+    chat_id: int, homework_id: int, messages: list[Message]
+) -> None:
+    _sent_detail_messages[(chat_id, homework_id)] = [
+        message.message_id for message in messages
+    ]
+
+
+def _forget_detail_ids(chat_id: int, homework_id: int) -> list[int]:
+    if len(_sent_detail_messages) > 200:
+        _sent_detail_messages.clear()
+    return _sent_detail_messages.pop((chat_id, homework_id), [])
+
+
+async def _cleanup_detail_messages(
+    bot: Bot,
+    chat_id: int,
+    homework_id: int,
+    *,
+    exclude: int | None = None,
+) -> None:
+    for message_id in _forget_detail_ids(chat_id, homework_id):
+        if message_id == exclude:
+            continue
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+
+
+def _attachment_send_plan(
+    attachments: list[Attachment],
+) -> list[tuple[str, list[Attachment]]]:
+    """План отправки вложений: ('album' | 'single', файлы одного типа)."""
+    ops: list[tuple[str, list[Attachment]]] = []
+    for attachment_type in (AttachmentType.PHOTO, AttachmentType.DOCUMENT):
+        items = [a for a in attachments if a.file_type == attachment_type]
+        for start in range(0, len(items), _ALBUM_MAX_ITEMS):
+            chunk = items[start : start + _ALBUM_MAX_ITEMS]
+            ops.append(("single" if len(chunk) == 1 else "album", chunk))
+    return ops
 
 
 def _date_ru(day: date) -> str:
@@ -180,6 +237,8 @@ async def _open_detail(
     user: User,
     service: HomeworkService,
     homework: Homework,
+    *,
+    delete_source: bool = True,
 ) -> None:
     detail = await service.get_detail(homework)
     can_modify = await service.can_modify(user, homework.group_id, homework)
@@ -194,49 +253,122 @@ async def _open_detail(
         can_add_files,
         deleteables,
     )
+    chat_id = message.chat.id
+    homework_id = homework.id
     attachments = await service.attachments_for(homework)
     if not attachments:
+        await _cleanup_detail_messages(bot, chat_id, homework_id)
         await edit_or_resend(message, text, markup)
         return
-    chat_id = message.chat.id
+    if delete_source:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    await _cleanup_detail_messages(bot, chat_id, homework_id)
+    sent: list[Message] = []
+    caption_placed = False
+    buttons_placed = False
     try:
-        await message.delete()
+        for operation, chunk in _attachment_send_plan(attachments):
+            if operation == "album":
+                media = _album_media(
+                    chunk, text if not caption_placed else None
+                )
+                if not caption_placed:
+                    caption_placed = True
+                sent.extend(await bot.send_media_group(chat_id, media))
+                continue
+            item = chunk[0]
+            if not caption_placed:
+                item_caption = text
+                item_markup = markup
+                caption_placed = True
+                buttons_placed = True
+            else:
+                item_caption = None
+                item_markup = None
+            if item.file_type == AttachmentType.PHOTO:
+                sent.append(
+                    await bot.send_photo(
+                        chat_id,
+                        item.telegram_file_id,
+                        caption=item_caption,
+                        parse_mode=(
+                            ParseMode.HTML if item_caption is not None else None
+                        ),
+                        reply_markup=item_markup,
+                    )
+                )
+            else:
+                sent.append(
+                    await bot.send_document(
+                        chat_id,
+                        item.telegram_file_id,
+                        caption=item_caption,
+                        parse_mode=(
+                            ParseMode.HTML if item_caption is not None else None
+                        ),
+                        reply_markup=item_markup,
+                    )
+                )
+        if not buttons_placed:
+            sent.append(
+                await bot.send_message(chat_id, _ACTION_HINT, reply_markup=markup)
+            )
+        _remember_detail(chat_id, homework_id, sent)
     except Exception:
-        pass
-    first, *rest = attachments
-    try:
-        if first.file_type == AttachmentType.PHOTO:
-            await bot.send_photo(
-                chat_id,
-                first.telegram_file_id,
-                caption=text,
-                reply_markup=markup,
+        try:
+            await bot.send_message(chat_id, text, reply_markup=markup)
+        except Exception:
+            pass
+        for item in attachments:
+            try:
+                if item.file_type == AttachmentType.PHOTO:
+                    await bot.send_photo(chat_id, item.telegram_file_id)
+                else:
+                    await bot.send_document(
+                        chat_id,
+                        item.telegram_file_id,
+                        caption=f"📎 {item.file_name or 'Файл'}",
+                    )
+            except Exception:
+                pass
+
+
+def _album_media(
+    chunk: list[Attachment],
+    caption: str | None,
+) -> list[MediaUnion]:
+    if chunk[0].file_type == AttachmentType.PHOTO:
+        media: list[MediaUnion] = []
+        for index, item in enumerate(chunk):
+            if index == 0 and caption is not None:
+                media.append(
+                    InputMediaPhoto(
+                        media=item.telegram_file_id,
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+                )
+            else:
+                media.append(InputMediaPhoto(media=item.telegram_file_id))
+        return media
+    documents: list[MediaUnion] = []
+    for index, item in enumerate(chunk):
+        if index == 0 and caption is not None:
+            documents.append(
+                InputMediaDocument(
+                    media=item.telegram_file_id,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                )
             )
         else:
-            await bot.send_document(
-                chat_id,
-                first.telegram_file_id,
-                caption=text,
-                reply_markup=markup,
+            documents.append(
+                InputMediaDocument(media=item.telegram_file_id)
             )
-    except Exception:
-        try:
-            await message.answer(text, reply_markup=markup)
-        except Exception:
-            pass
-        return
-    for item in rest:
-        try:
-            if item.file_type == AttachmentType.PHOTO:
-                await bot.send_photo(chat_id, item.telegram_file_id, caption="🖼 Фото")
-            else:
-                await bot.send_document(
-                    chat_id,
-                    item.telegram_file_id,
-                    caption=f"📎 {item.file_name or 'Файл'}",
-                )
-        except Exception:
-            pass
+    return documents
 
 
 async def render_homework_detail(
@@ -741,6 +873,11 @@ async def _apply_text_field(
         await service.update_homework(homework, description=value)
     await state.clear()
     detail = await service.get_detail(homework)
+    if detail.attachments:
+        await _open_detail(
+            message, bot, session, user, service, homework, delete_source=False
+        )
+        return
     deleteables = {item.id for item in detail.attachments}
     text, markup = _detail_payload(
         homework, detail, True, True, deleteables
@@ -786,6 +923,8 @@ async def on_edit_description(
 
 async def _finish_edit(
     message: Message,
+    bot: Bot,
+    session: AsyncSession,
     service: HomeworkService,
     homework: Homework,
     user: User,
@@ -798,6 +937,9 @@ async def _finish_edit(
     deleteables = await _deleteable_attachment_ids(
         service, user, homework, detail
     )
+    if len(detail.attachments) >= 2:
+        await _open_detail(message, bot, session, user, service, homework)
+        return
     text, markup = _detail_payload(
         homework,
         detail,
@@ -838,7 +980,7 @@ async def apply_edit_field(
         homework.description = None
     await session.flush()
     await state.clear()
-    await _finish_edit(query.message, service, homework, user)
+    await _finish_edit(query.message, bot, session, service, homework, user)
     await query.answer()
 
 
@@ -890,7 +1032,7 @@ async def finalize_edit_attachments(
         return
     await session.flush()
     await state.clear()
-    await _finish_edit(query.message, service, homework, user)
+    await _finish_edit(query.message, bot, session, service, homework, user)
     await query.answer()
 
 
@@ -962,6 +1104,12 @@ async def on_delete_confirm(
         )
         return
     await service.delete_homework(homework)
+    await _cleanup_detail_messages(
+        bot,
+        query.message.chat.id,
+        homework_id,
+        exclude=query.message.message_id,
+    )
     await edit_or_resend(
         query.message, "✅ Задание удалено. Нажми /menu для возврата."
     )
