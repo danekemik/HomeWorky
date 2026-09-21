@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import Group, User
 from app.database.repositories.group_repository import GroupRepository
-from app.services.group_service import GroupService
 
 _GROUP_CHAT_TYPES = frozenset({ChatType.GROUP, ChatType.SUPERGROUP})
 
@@ -34,9 +33,4 @@ async def resolve_group(
     group_id = data.get("current_group_id") or user.selected_group_id
     if group_id is None:
         return None
-    stored_group = await GroupRepository(session).get(group_id)
-    if stored_group is None:
-        return None
-    if not await GroupService(session).has_access(stored_group, user):
-        return None
-    return stored_group
+    return await GroupRepository(session).get_for_member(group_id, user.id)

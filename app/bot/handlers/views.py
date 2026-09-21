@@ -21,10 +21,10 @@ from app.bot.callbacks import (
 from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import bot_today, build_homework_card, esc, format_homework_label
-from app.bot.handlers.homework import NO_GROUP_TEXT
 from app.bot.keyboards.homework import (
     attachment_keyboard,
     back_only_keyboard,
+    skip_or_cancel_keyboard,
     subject_picker_keyboard,
 )
 from app.bot.keyboards.menu import CB_ALL_TASKS, CB_NEAREST_DEADLINES
@@ -35,6 +35,7 @@ from app.bot.keyboards.views import (
     homework_list_keyboard,
     homeworks_category_keyboard,
 )
+from app.bot.messages import NO_GROUP_TEXT
 from app.bot.render import edit_or_resend
 from app.bot.states.homework import HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
@@ -358,8 +359,13 @@ async def on_page(
     if not query.data:
         await query.answer()
         return
-    _, category, index = query.data.split(":")
-    if category not in _CATEGORY_TITLES:
+    try:
+        _, category, index = query.data.split(":")
+        page = int(index)
+    except (ValueError, IndexError):
+        await query.answer()
+        return
+    if category not in _CATEGORY_TITLES or page < 0:
         await query.answer()
         return
     await _render_category_list(
@@ -369,7 +375,7 @@ async def on_page(
         user=user,
         state=state,
         category=category,
-        page=int(index),
+        page=page,
     )
 
 
@@ -492,6 +498,10 @@ async def on_edit_field(
         await query.message.edit_text(
             prompt, reply_markup=attachment_keyboard(False)
         )
+    elif field == "description":
+        await query.message.edit_text(
+            prompt, reply_markup=skip_or_cancel_keyboard()
+        )
     else:
         await query.message.edit_text(prompt, reply_markup=back_only_keyboard())
     await query.answer()
@@ -520,11 +530,20 @@ async def _apply_text_field(
         await message.answer("Доступ запрещён или задание не найдено.")
         return
     if field == "title":
-        await service.update_homework(homework, title=str(value))
+        value = (value or "").strip()
+        if not value:
+            await message.answer("Название не может быть пустым.")
+            return
+        if len(value) > 255:
+            await message.answer("Название слишком длинное (максимум 255 символов).")
+            return
+        await service.update_homework(homework, title=value)
     elif field == "description":
-        await service.update_homework(
-            homework, description=str(value) if value is not None else None
-        )
+        value = (value or "").strip() or None
+        if value is not None and len(value) > 4000:
+            await message.answer("Описание слишком длинное (максимум 4000 символов).")
+            return
+        await service.update_homework(homework, description=value)
     await state.clear()
     detail = await service.get_detail(homework)
     text, markup = _detail_payload(homework, detail, True)
@@ -636,7 +655,7 @@ async def finalize_edit_attachments(
         return
     if data.get("deadline"):
         homework.deadline = date.fromisoformat(str(data["deadline"]))
-    await service.replace_attachments(
+    await service.attach_pending(
         homework,
         attachments=list(data.get("attachments", [])),  # type: ignore[arg-type]
         links=list(data.get("links", [])),  # type: ignore[arg-type]

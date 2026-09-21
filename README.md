@@ -36,12 +36,55 @@ alembic upgrade head
 python -m app.main
 ```
 
+Если в `.env` указан `REDIS_URL` — состояния FSM хранятся в Redis,
+иначе используется MemoryStorage (логика: `app/bot/main.py::create_storage`).
+
 ## Запуск в Docker
 
 ```bash
 cp .env.example .env
-# впишите BOT_TOKEN
+# впишите BOT_TOKEN (и при необходимости POSTGRES_PASSWORD)
 docker compose up -d --build
+```
+
+Стек поднимает три сервиса: `db` (Postgres 16), `redis` (FSM),
+`bot` (Entrypoint накатывает `alembic upgrade head` и запускает поллинг).
+Порт Postgres наружу проброшен на `127.0.0.1:5433` (Redis — на
+`127.0.0.1:6380`), чтобы не конфликтовать с локальными сервисами на VPS.
+
+Локальные контейнеры (только db и redis) для разработки:
+
+```bash
+docker compose up -d db redis
+```
+
+## Деплой на VPS
+
+```bash
+git clone <repo> && cd <repo>
+cp .env.example .env          # BOT_TOKEN, REMINDER_TIME и др.
+docker compose up -d --build
+docker compose logs -f bot    # убедиться, что бот запустился
+```
+
+Перенос существующих данных из SQLite в Postgres (перед первым запуском):
+
+```bash
+alembic upgrade head            # создать схему в Postgres
+python scripts/migrate_sqlite_to_postgres.py --src sqlite+aiosqlite:///homework.db \
+    --dst postgresql+asyncpg://postgres:postgres@<host>/homework_bot
+```
+
+## Бэкапы
+
+```bash
+./scripts/backup_pg.sh [N_DAYS_KEEP]   # дамп в ./backups с ротацией
+```
+
+Пример cron (ежедневно в 03:00):
+
+```
+0 3 * * * /path/to/project/scripts/backup_pg.sh >> /path/to/project/logs/backup.log 2>&1
 ```
 
 ## Использование

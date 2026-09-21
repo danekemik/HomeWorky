@@ -23,10 +23,16 @@ async def run_reminder_loop(bot: Bot, database: Database, cfg: Settings) -> None
         if now < target_time:
             await _sleep_until(target_time, cfg.tz)
 
-        await _send_tomorrow_digests(bot, database, now.date())
-        await _cleanup_expired_homeworks(database, now.date())
+        try:
+            await _send_tomorrow_digests(bot, database, datetime.now(cfg.tz).date())
+        except Exception:
+            logger.exception("Не удалось выполнить вечернюю рассылку")
+        try:
+            await _cleanup_expired_homeworks(database, datetime.now(cfg.tz).date())
+        except Exception:
+            logger.exception("Не удалось почистить просроченные задания")
 
-        next_day = now.date() + timedelta(days=1)
+        next_day = datetime.now(cfg.tz).date() + timedelta(days=1)
         next_target = datetime.combine(
             next_day, cfg.reminder_time, tzinfo=cfg.tz
         )

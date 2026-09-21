@@ -11,12 +11,11 @@ from app.bot.filters.chat_type import ChatTypeFilter
 from app.bot.formats import bot_today
 from app.bot.keyboards.menu import CB_STATS
 from app.bot.keyboards.views import back_to_menu_keyboard
+from app.bot.messages import NO_GROUP_TEXT
 from app.database.models import User
 from app.services.homework_service import HomeworkService
 
 router = Router(name="statistics")
-
-NO_GROUP_TEXT = "Сначала выбери свою группу в меню (/menu)."
 
 
 @router.callback_query(CallbackDataPrefix(CB_STATS))

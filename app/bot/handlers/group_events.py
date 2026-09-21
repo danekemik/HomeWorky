@@ -5,6 +5,7 @@ from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.filters.chat_type import ChatTypeFilter
+from app.bot.formats import esc
 from app.database.models import User
 from app.database.repositories import GroupRepository
 from app.services.group_service import GroupService
@@ -62,9 +63,9 @@ async def on_link_chat(
         return
     error = await service.bind_chat(group, message.chat)
     if error is not None:
-        await message.answer(error)
+        await message.answer(esc(error))
         return
     await session.commit()
     await message.answer(
-        f"✅ Чат привязан к группе «{group.name}». Напоминания будут приходить сюда."
+        f"✅ Чат привязан к группе «{esc(group.name)}». Напоминания будут приходить сюда."
     )

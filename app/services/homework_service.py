@@ -227,16 +227,6 @@ class HomeworkService:
                 title=str(title) if title else None,
             )
 
-    async def replace_attachments(
-        self,
-        homework: Homework,
-        attachments: list[dict[str, object]],
-        links: list[dict[str, object]],
-    ) -> None:
-        await self._repo.clear_attachments(homework.id)
-        await self._repo.clear_links(homework.id)
-        await self.attach_pending(homework, attachments, links)
-
     async def stats(self, group_id: int, user_id: int, today: date) -> dict[str, int]:
         total = await self._repo.count_for_group(group_id)
         created_by_me = await self._repo.count_created_by(group_id, user_id)

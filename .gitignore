@@ -31,3 +31,11 @@ coverage.xml
 # Runtime
 *.log
 logs/
+
+# Бэкапы БД
+backups/
+
+# Локальная БД (fresh Dev запуск на SQLite)
+homework.db
+homework.db-wal
+homework.db-shm

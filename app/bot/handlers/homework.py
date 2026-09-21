@@ -1,6 +1,7 @@
 from datetime import date
 
 from aiogram import Bot, Router
+from aiogram.enums import MessageEntityType
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -37,14 +38,13 @@ from app.bot.keyboards.homework import (
 )
 from app.bot.keyboards.menu import CB_ADD_HOMEWORK, main_menu_keyboard
 from app.bot.keyboards.views import homework_edit_field_keyboard
+from app.bot.messages import NO_GROUP_TEXT
 from app.bot.states.group_flow import GroupFlow
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
-from app.database.models import AttachmentType, User
-from app.services.homework_service import HomeworkService
+from app.database.models import AttachmentType, Homework, User
+from app.services.homework_service import HomeworkDetail, HomeworkService
 
 router = Router(name="homework")
-
-NO_GROUP_TEXT = "Сначала выбери свою группу в меню (/menu)."
 
 
 @router.callback_query(CallbackDataPrefix(CB_ADD_HOMEWORK))
@@ -84,7 +84,7 @@ ATTACH_PENDING = (
     "\n"
     "Так, теперь материалы.\n"
     "\n"
-    "Есть файл, фото или документ?\n"
+    "Есть файл, фото, ссылка?\n"
     "Кидай сюда 📎"
 )
 
@@ -126,7 +126,7 @@ def _pending_preview_card(data: dict) -> str:
     lines = [
         "🐹 *Homy раскладывает бумаги на столе*",
         "",
-        f"📚 {subject}",
+        f"📚 {esc(subject)}",
         f"📝 {esc(str(data['title']))}",
     ]
     description = data.get("description")
@@ -263,6 +263,8 @@ async def _apply_new_subject(
 ) -> int:
     service = HomeworkService(session)
     name = text.strip()
+    if len(name) > 128:
+        raise ValueError("Название предмета слишком длинное (максимум 128 символов).")
     existing = await service.subject_by_name(group_id, name)
     if existing is not None:
         return existing.id
@@ -287,9 +289,13 @@ async def on_new_subject(
         await message.answer(NO_GROUP_TEXT)
         return
     service = HomeworkService(session)
-    subject_id = await _apply_new_subject(
-        text=name, group_id=group.id, session=session
-    )
+    try:
+        subject_id = await _apply_new_subject(
+            text=name, group_id=group.id, session=session
+        )
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
     subject = await service.get_subject(subject_id)
     select_current_group(user, group.id)
     await state.update_data(
@@ -330,6 +336,9 @@ async def on_title(message: Message, state: FSMContext) -> None:
     if not title:
         await message.answer("Название не может быть пустым.")
         return
+    if len(title) > 255:
+        await message.answer("Название слишком длинное (максимум 255 символов).")
+        return
     await state.update_data(title=title)
     if (await state.get_data()).get("from_fields"):
         await _render_preview_message(message, state, answer=True)
@@ -340,7 +349,11 @@ async def on_title(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(HomeworkCreation.description))
 async def on_description(message: Message, state: FSMContext) -> None:
-    await state.update_data(description=(message.text or "").strip() or None)
+    description = (message.text or "").strip() or None
+    if description is not None and len(description) > 4000:
+        await message.answer("Описание слишком длинное (максимум 4000 символов).")
+        return
+    await state.update_data(description=description)
     if (await state.get_data()).get("from_fields"):
         await _render_preview_message(message, state, answer=True)
         return
@@ -365,6 +378,8 @@ async def on_calendar(
     if payload.startswith("nav:"):
         try:
             year, month = map(int, payload[4:].split("-"))
+            if not (1 <= month <= 12) or not (1 <= year <= 9999):
+                raise ValueError
             cursor = date(year, month, 1)
         except ValueError:
             await query.answer()
@@ -380,6 +395,11 @@ async def on_calendar(
         chosen = date.fromisoformat(payload[4:])
     except ValueError:
         await query.answer()
+        return
+    if chosen < bot_today():
+        await query.answer(
+            "Дата сдачи не может быть в прошлом.", show_alert=True
+        )
         return
 
     if _is_base_edit(state_name):
@@ -418,17 +438,47 @@ def _collect_attachment(message: Message) -> dict[str, object] | None:
     return None
 
 
+def _extract_link(message: Message) -> str | None:
+    """Возвращает первый URL из текста сообщения (по entity или по regex-хвосту)."""
+    if not message.entities:
+        return None
+    for entity in message.entities:
+        if entity.type == MessageEntityType.URL:
+            start, end = entity.offset, entity.offset + entity.length
+            url = (message.text or "")[start:end].strip()
+            if url and "://" in url:
+                return url
+        if entity.type == MessageEntityType.TEXT_LINK and entity.url:
+            return entity.url
+    return None
+
+
 @router.message(StateFilter(HomeworkCreation.attachment, HomeworkEditField.attachment))
 async def on_attachment_message(
     message: Message, bot: Bot, session: AsyncSession, user: User, state: FSMContext
 ) -> None:
-    if message.text:
-        await message.answer("Сюда можно добавить только файл 📄 или фото 🖼.")
-        return
     data = dict(await state.get_data())
+    if message.text:
+        url = _extract_link(message)
+        if url is None:
+            await message.answer(
+                "Сюда можно добавить файл 📄, фото 🖼 или ссылку 🔗 "
+                "(скопируй URL и отправь как текст)."
+            )
+            return
+        data.setdefault("links", []).append({"url": url, "title": None})
+        await state.update_data(**data)
+        await message.answer(
+            f"➕ Добавлена ссылка: 🔗 {esc(url)}\n"
+            "Можно добавить ещё или «✅ Готово».",
+            reply_markup=attachment_keyboard(True),
+        )
+        return
     attachment = _collect_attachment(message)
     if attachment is None:
-        await message.answer("Пришли файл 📄, фото 🖼 или нажми «✅ Готово».")
+        await message.answer(
+            "Пришли файл 📄, фото 🖼, ссылку 🔗 или нажми «✅ Готово»."
+        )
         return
     data.setdefault("attachments", []).append(attachment)
     await state.update_data(**data)
@@ -444,21 +494,21 @@ async def on_attachment_message(
     )
 
 
-def _created_confirmation_card(detail: object, homework: object) -> str:
+def _created_confirmation_card(detail: HomeworkDetail, homework: Homework) -> str:
     lines = [
         "🐹 *Homy ставит жирную галочку в блокноте*",
         "",
         "✓ ЗАПИСАНО",
-        f"📚 {detail.subject.capitalize()}",  # type: ignore[attr-defined]
-        f"📝 {homework.title}",  # type: ignore[attr-defined]
-        f"📅 {format_date_russian(homework.deadline)}",  # type: ignore[attr-defined]
+        f"📚 {esc(detail.subject.capitalize())}",
+        f"📝 {esc(homework.title)}",
+        f"📅 {format_date_russian(homework.deadline)}",
     ]
-    for item in detail.attachments:  # type: ignore[attr-defined]
-        if item.file_type == AttachmentType.PHOTO:  # type: ignore[attr-defined]
+    for item in detail.attachments:
+        if item.file_type == AttachmentType.PHOTO:
             lines.append("🖼 Фото")
         else:
             lines.append("📎 Файл")
-    for link in detail.links:  # type: ignore[attr-defined]
+    for link in detail.links:
         lines.append(f"🔗 {esc(link.title or link.url)}")
     lines += [
         "",

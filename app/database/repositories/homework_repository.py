@@ -161,16 +161,6 @@ class HomeworkRepository(BaseRepository[Homework]):
         await self._session.flush()
         return link
 
-    async def clear_attachments(self, homework_id: int) -> None:
-        await self._session.execute(
-            delete(Attachment).where(Attachment.homework_id == homework_id)
-        )
-
-    async def clear_links(self, homework_id: int) -> None:
-        await self._session.execute(
-            delete(HomeworkLink).where(HomeworkLink.homework_id == homework_id)
-        )
-
     async def attachments_for(self, homework_id: int) -> list[Attachment]:
         stmt = (
             select(Attachment)

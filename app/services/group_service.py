@@ -29,7 +29,7 @@ def format_code(code: str) -> str:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return datetime.now(UTC)
 
 
 def _new_expiry() -> datetime:
@@ -42,6 +42,13 @@ class GroupService:
     def __init__(self, session: AsyncSession) -> None:
         self._groups = GroupRepository(session)
 
+    async def _unique_code(self) -> str:
+        for _ in range(10):
+            code = self._generate_code()
+            if await self._groups.get_by_invite_code(code) is None:
+                return code
+        raise GroupError("Не удалось сгенерировать уникальный код. Попробуй ещё раз.")
+
     async def create_group(self, *, creator: User, name: str) -> Group:
         clean = " ".join(name.split()).strip()
         if not clean:
@@ -53,7 +60,7 @@ class GroupService:
         group = await self._groups.create(
             name=clean,
             created_by=creator.id,
-            invite_code=self._generate_code(),
+            invite_code=await self._unique_code(),
             invite_code_expires_at=_new_expiry(),
         )
         await self._groups.upsert_membership(
@@ -94,8 +101,7 @@ class GroupService:
         return await self._groups.list_groups_for_user(user.id)
 
     async def admin_groups(self, user: User) -> list[Group]:
-        groups = await self.list_groups_for_user(user)
-        return [g for g in groups if await self.is_admin(g, user)]
+        return await self._groups.list_admin_groups_for_user(user.id)
 
     async def list_members(self, group: Group) -> list[GroupMember]:
         return await self._groups.list_members(group.id)
@@ -114,7 +120,9 @@ class GroupService:
         return group.invite_code, group.invite_code_expires_at
 
     async def rotate_invite_code(self, group: Group) -> None:
-        await self._groups.set_invite_code(group, self._generate_code(), _new_expiry())
+        await self._groups.set_invite_code(
+            group, await self._unique_code(), _new_expiry()
+        )
 
     async def find_by_invite_code(self, code: str) -> Group | None:
         return await self._groups.get_by_invite_code(normalize_code(code))

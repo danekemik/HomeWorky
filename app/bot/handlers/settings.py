@@ -128,7 +128,11 @@ async def on_management(
     if not query.data:
         await query.answer()
         return
-    group_id = int(query.data[len(SET_MANAGE_GROUP):])
+    try:
+        group_id = int(query.data[len(SET_MANAGE_GROUP):])
+    except ValueError:
+        await query.answer()
+        return
     await render_management(query, session, user, group_id)
 
 
@@ -141,7 +145,11 @@ async def on_code_rotate(
     if not query.data:
         await query.answer()
         return
-    group_id = int(query.data[len(SET_CODE_ROTATE):])
+    try:
+        group_id = int(query.data[len(SET_CODE_ROTATE):])
+    except ValueError:
+        await query.answer()
+        return
     service = GroupService(session)
     group = await GroupRepository(session).get(group_id)
     if group is None:
@@ -163,7 +171,11 @@ async def on_members(
     if not query.data:
         await query.answer()
         return
-    group_id = int(query.data[len(SET_MEMBERS):])
+    try:
+        group_id = int(query.data[len(SET_MEMBERS):])
+    except ValueError:
+        await query.answer()
+        return
     await render_members(query, session, user, group_id, offset=0)
 
 
@@ -177,7 +189,12 @@ async def on_members_page(
         await query.answer()
         return
     _, group_raw, offset_raw = query.data.split(":")
-    await render_members(query, session, user, int(group_raw), offset=int(offset_raw))
+    try:
+        group_id, offset = int(group_raw), int(offset_raw)
+    except ValueError:
+        await query.answer()
+        return
+    await render_members(query, session, user, group_id, offset=offset)
 
 
 async def render_members(
@@ -226,7 +243,11 @@ async def on_member_remove(
     if not isinstance(message, Message) or not group_raw or not target_raw:
         await query.answer()
         return
-    group_id, target_user_id = int(group_raw), int(target_raw)
+    try:
+        group_id, target_user_id = int(group_raw), int(target_raw)
+    except ValueError:
+        await query.answer()
+        return
     service = GroupService(session)
     group = await GroupRepository(session).get(group_id)
     if group is None:
@@ -263,7 +284,11 @@ async def on_member_remove_confirm(
     if not isinstance(message, Message) or not group_raw or not target_raw:
         await query.answer()
         return
-    group_id, target_user_id = int(group_raw), int(target_raw)
+    try:
+        group_id, target_user_id = int(group_raw), int(target_raw)
+    except ValueError:
+        await query.answer()
+        return
     service = GroupService(session)
     group = await GroupRepository(session).get(group_id)
     if group is None:

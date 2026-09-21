@@ -54,6 +54,32 @@ class GroupRepository(BaseRepository[Group]):
         )
         return list((await self._session.scalars(stmt)).all())
 
+    async def list_admin_groups_for_user(self, user_id: int) -> list[Group]:
+        stmt = (
+            select(Group)
+            .join(GroupMember, GroupMember.group_id == Group.id)
+            .where(
+                GroupMember.user_id == user_id,
+                GroupMember.role == MemberRole.ADMIN,
+            )
+            .order_by(Group.name)
+        )
+        return list((await self._session.scalars(stmt)).all())
+
+    async def get_for_member(
+        self, group_id: int, user_id: int
+    ) -> Group | None:
+        """Возвращает группу одним запросом, только если пользователь — участник."""
+        stmt = (
+            select(Group)
+            .join(GroupMember, GroupMember.group_id == Group.id)
+            .where(
+                GroupMember.group_id == group_id,
+                GroupMember.user_id == user_id,
+            )
+        )
+        return await self._session.scalar(stmt)
+
     async def get_membership(self, group_id: int, user_id: int) -> GroupMember | None:
         stmt = select(GroupMember).where(
             GroupMember.group_id == group_id,

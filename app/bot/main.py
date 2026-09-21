@@ -5,10 +5,12 @@ from typing import Any
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, ErrorEvent, Message, TelegramObject
 
 from app.bot.handlers import group_events, homework, menu, settings, start, statistics, views
 from app.bot.middlewares.db import DatabaseSessionMiddleware
+from app.bot.middlewares.throttling import ThrottlingMiddleware
 from app.bot.middlewares.user import UserContextMiddleware
 from app.database.session import Database
 
@@ -21,8 +23,19 @@ def create_bot(token: str) -> Bot:
     return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
-def create_dispatcher(database: Database) -> Dispatcher:
-    dispatcher = Dispatcher()
+def create_storage(redis_url: str | None) -> Any:
+    if redis_url:
+        from aiogram.fsm.storage.redis import RedisStorage
+        from redis.asyncio import Redis
+
+        client = Redis.from_url(redis_url, decode_responses=True)
+        return RedisStorage(redis=client)
+    return MemoryStorage()
+
+
+def create_dispatcher(database: Database, redis_url: str | None = None) -> Dispatcher:
+    dispatcher = Dispatcher(storage=create_storage(redis_url))
+    dispatcher.update.middleware(ThrottlingMiddleware())
     dispatcher.update.middleware(DatabaseSessionMiddleware(database))
     dispatcher.update.middleware(UserContextMiddleware())
     dispatcher.include_router(start.router)
@@ -48,6 +61,12 @@ async def global_error_handler(
         ),
     )
     inner = event.update.event
+    state = (data or {}).get("state")
+    if state is not None:
+        try:
+            await state.clear()
+        except Exception:
+            logger.exception("Failed to clear FSM state after an error")
     try:
         if isinstance(inner, CallbackQuery):
             await inner.answer(

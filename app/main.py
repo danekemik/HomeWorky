@@ -33,7 +33,7 @@ async def main() -> None:
     database = Database(settings.DATABASE_URL)
     bot = create_bot(settings.BOT_TOKEN)
     await _register_commands(bot)
-    dispatcher = create_dispatcher(database)
+    dispatcher = create_dispatcher(database, redis_url=settings.REDIS_URL)
     reminder_task = asyncio.create_task(
         run_reminder_loop(bot, database, settings)
     )
