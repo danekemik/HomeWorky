@@ -76,12 +76,12 @@ class RecordingSession(BaseSession):
         return [type(call).__name__ for call in self.calls]
 
 
-def _source_message(bot: Bot, chat_id: int) -> Any:
+def _source_message(bot: Bot, chat_id: int, message_id: int = 100) -> Any:
     from aiogram.types import Message
 
     return Message.model_validate(
         {
-            "message_id": 100,
+            "message_id": message_id,
             "date": 0,
             "chat": {"id": chat_id, "type": "private"},
             "from_user": {"id": 1, "is_bot": False, "first_name": "Test"},
@@ -248,3 +248,38 @@ def test_card_files_collapsed_to_single_line() -> None:
         attachment_limit=10,
     )
     assert "📎 Файлы (5/10): a.pdf · b.pdf · c.pdf · и ещё 2" in text
+
+
+async def test_delete_last_file_edits_buttons_message(session) -> None:
+    chat_id = 9004
+    user, service, hw = await _seed_homework(session, attachments=1)
+    recording = RecordingSession()
+    recording.chat_id = chat_id
+    bot = Bot(token=BOT_TOKEN, session=recording)
+
+    await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
+    buttons_id = next(
+        message_id
+        for name, message_id in recording.results
+        if name == "SendMessage"
+    )
+    photo_id = next(
+        message_id for name, message_id in recording.results if name == "SendPhoto"
+    )
+    attachment_id = (await service.attachments_for(hw))[0].id
+    await service.delete_attachment(hw, attachment_id)
+
+    await _open_detail(
+        _source_message(bot, chat_id, buttons_id), bot, session, user, service, hw
+    )
+
+    names = recording.names()
+    assert "EditMessageText" in names
+    assert names.count("SendPhoto") == 1
+    deleted = [
+        call.message_id
+        for call in recording.calls
+        if type(call).__name__ == "DeleteMessage"
+    ]
+    assert photo_id in deleted
+    assert buttons_id not in deleted

@@ -290,7 +290,9 @@ async def _open_detail(
     homework_id = homework.id
     attachments = await service.attachments_for(homework)
     if not attachments:
-        await _cleanup_detail_messages(bot, chat_id, homework_id)
+        await _cleanup_detail_messages(
+            bot, chat_id, homework_id, exclude=message.message_id
+        )
         await edit_or_resend(message, text, markup)
         return
     if delete_source:
