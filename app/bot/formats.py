@@ -10,6 +10,16 @@ def esc(value: str | None) -> str:
     return _escape(value or "", quote=False)
 
 
+_BUTTON_TEXT_LIMIT = 60
+
+
+def clamp_button_text(value: str, limit: int = _BUTTON_TEXT_LIMIT) -> str:
+    """Ограничивает текст кнопки (лимит Telegram — 64 символа)."""
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 1)] + "…"
+
+
 def safe_int(value: str | None) -> int | None:
     """Возвращает int или None вместо исключения на битых callback_data."""
     try:

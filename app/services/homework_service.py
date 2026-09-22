@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,9 @@ class SubjectError(Exception):
 
 _SUBJECT_NAME_MAX = 128
 
+# Маркер «поле не передано» (позволяет явно очистить описание значением None).
+_UNSET: Any = object()
+
 
 def _clean_subject_name(name: str) -> str:
     clean = " ".join(name.split()).strip()
@@ -77,6 +81,7 @@ class HomeworkDetail:
 
 class HomeworkService:
     MAX_ATTACHMENTS = 3
+    MAX_LINKS = 20
 
     def __init__(self, session: AsyncSession) -> None:
         self._repo = HomeworkRepository(session)
@@ -136,12 +141,12 @@ class HomeworkService:
         homework: Homework,
         *,
         title: str | None = None,
-        description: str | None = None,
+        description: Any = _UNSET,
         deadline: date | None = None,
     ) -> Homework:
         if title is not None:
             homework.title = title
-        if description is not None:
+        if description is not _UNSET:
             homework.description = description
         if deadline is not None:
             homework.deadline = deadline
@@ -211,6 +216,21 @@ class HomeworkService:
             group_id, start, today - timedelta(days=1)
         )
 
+    async def list_overdue(
+        self,
+        group_id: int,
+        today: date,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Homework]:
+        return await self._repo.list_overdue(
+            group_id, today, limit=limit, offset=offset
+        )
+
+    async def count_overdue(self, group_id: int, today: date) -> int:
+        return await self._repo.count_overdue(group_id, today)
+
     async def list_created_by(
         self,
         group_id: int,
@@ -242,7 +262,7 @@ class HomeworkService:
         return await self._subjects.get(subject_id)
 
     async def create_subject(self, group_id: int, name: str) -> Subject:
-        clean = name.strip()
+        clean = " ".join(name.split()).strip()
         try:
             async with self._session.begin_nested():
                 return await self._subjects.create(group_id, clean)
@@ -336,6 +356,9 @@ class HomeworkService:
 
     async def links_for(self, homework: Homework) -> list[HomeworkLink]:
         return await self._repo.links_for(homework.id)
+
+    async def link_count(self, homework: Homework) -> int:
+        return await self._repo.count_links(homework.id)
 
     async def get_detail(self, homework: Homework) -> HomeworkDetail:
         subject = await self._repo.get_subject_name(homework)

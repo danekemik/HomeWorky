@@ -84,7 +84,7 @@ def test_next_datetime_chosen_today_or_tomorrow() -> None:
     assert _next_datetime(late, reminder) == datetime(2026, 9, 22, 20, 0, tzinfo=tz)
 
 
-async def test_send_tomorrow_digests_only_due_groups(
+async def test_send_tomorrow_digests_due_groups(
     session, session_factory
 ) -> None:
     now = datetime(2026, 9, 21, 20, 0, 5, tzinfo=settings.tz)
@@ -100,11 +100,8 @@ async def test_send_tomorrow_digests_only_due_groups(
         await _seed_homework(session, group, target)
     await session.commit()
 
-    def is_due(group) -> bool:
-        scheduled = group.reminder_time or default
-        return (scheduled.hour, scheduled.minute) == (now.hour, now.minute)
-
-    expected = [g.telegram_chat_id for g in groups if is_due(g)]
+    # время напоминания уже наступило для всех (никто не получал дайджест сегодня)
+    expected = [g.telegram_chat_id for g in groups]
 
     recording = RecordingSession()
     bot = Bot(token=BOT_TOKEN, session=recording)
@@ -118,3 +115,88 @@ async def test_send_tomorrow_digests_only_due_groups(
 
     assert recording.sent == expected
     assert recording.sent  # хотя бы одна группа получила дайджест
+
+
+async def test_send_tomorrow_digests_skips_future_reminders(
+    session, session_factory
+) -> None:
+    now = datetime(2026, 9, 21, 19, 0, 0, tzinfo=settings.tz)
+    target = now.date() + timedelta(days=1)
+    default = settings.reminder_time
+
+    await _bound_group(session, 8001, "А", default)
+    await _bound_group(session, 8003, "В", None)
+
+    groups = list(await GroupRepository(session).list_all())
+    for group in groups:
+        await _seed_homework(session, group, target)
+    await session.commit()
+
+    # время напоминания ещё не наступило — рассылки быть не должно
+    recording = RecordingSession()
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    await _send_tomorrow_digests(
+        bot,
+        cast(DatabaseType, _FakeDatabase(session_factory)),
+        now,
+        groups,
+        settings,
+    )
+
+    assert recording.sent == []
+
+
+async def test_send_tomorrow_digests_late_wake_reaches_group(
+    session, session_factory
+) -> None:
+    """Бот проснулся позже запланированного — группа получает дайджест."""
+    now = datetime(2026, 9, 21, 21, 30, 0, tzinfo=settings.tz)
+    target = now.date() + timedelta(days=1)
+
+    await _bound_group(session, 9501, "А", dtime(20, 0))
+
+    groups = list(await GroupRepository(session).list_all())
+    for group in groups:
+        await _seed_homework(session, group, target)
+    await session.commit()
+
+    recording = RecordingSession()
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    await _send_tomorrow_digests(
+        bot,
+        cast(DatabaseType, _FakeDatabase(session_factory)),
+        now,
+        groups,
+        settings,
+    )
+
+    assert recording.sent == [groups[0].telegram_chat_id]
+
+
+async def test_send_tomorrow_digests_does_not_duplicate(
+    session, session_factory
+) -> None:
+    now = datetime(2026, 9, 21, 20, 0, 5, tzinfo=settings.tz)
+    target = now.date() + timedelta(days=1)
+
+    await _bound_group(session, 9001, "А", None)
+
+    groups = list(await GroupRepository(session).list_all())
+    for group in groups:
+        await _seed_homework(session, group, target)
+    await session.commit()
+
+    last_sent: dict[int, date] = {groups[0].id: now.date()}
+
+    recording = RecordingSession()
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    await _send_tomorrow_digests(
+        bot,
+        cast(DatabaseType, _FakeDatabase(session_factory)),
+        now,
+        groups,
+        settings,
+        last_sent=last_sent,
+    )
+
+    assert recording.sent == []

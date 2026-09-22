@@ -10,7 +10,7 @@ from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import esc, safe_int
 from app.bot.handlers.menu import build_menu_payload
 from app.bot.keyboards.homework import back_only_keyboard
-from app.bot.keyboards.menu import CB_SETTINGS
+from app.bot.keyboards.menu import CB_SETTINGS, main_menu_keyboard
 from app.bot.keyboards.settings import (
     PAGE_SIZE_MEMBERS,
     SET_CODE_ROTATE,
@@ -32,6 +32,10 @@ from app.bot.keyboards.settings import (
     SET_SUBJECT_DELETE_CONFIRM,
     SET_SUBJECT_RENAME,
     SET_SUBJECTS,
+    SET_TRANSFER,
+    SET_TRANSFER_CONFIRM,
+    SET_TRANSFER_PAGE,
+    SET_TRANSFER_PICK,
     admin_group_picker_keyboard,
     leave_confirm_keyboard,
     leave_picker_keyboard,
@@ -42,6 +46,7 @@ from app.bot.keyboards.settings import (
     settings_keyboard,
     subject_delete_confirm_keyboard,
     subjects_keyboard,
+    transfer_confirm_keyboard,
 )
 from app.bot.states.group_flow import SettingsFlow
 from app.config import settings
@@ -64,6 +69,16 @@ def _user_label(user: User) -> str:
     if user.username:
         return f"@{user.username}"
     return f"id{user.telegram_id}"
+
+
+def _page_args(data: str, prefix: str) -> tuple[int, int] | None:
+    """Парсит {prefix}{group_id}:{offset}, переживая лишние ':' в данных."""
+    payload = data[len(prefix):]
+    group_raw, _, offset_raw = payload.partition(":")
+    try:
+        return int(group_raw), int(offset_raw)
+    except ValueError:
+        return None
 
 
 def _management_text(
@@ -321,15 +336,14 @@ async def on_members_page(
     session: AsyncSession,
     user: User,
 ) -> None:
-    if not query.data or query.data.count(":") < 2:
+    if not query.data:
         await query.answer()
         return
-    _, group_raw, offset_raw = query.data.split(":")
-    try:
-        group_id, offset = int(group_raw), int(offset_raw)
-    except ValueError:
+    parsed = _page_args(query.data, SET_MEMBER_PAGE)
+    if parsed is None:
         await query.answer()
         return
+    group_id, offset = parsed
     await render_members(query, session, user, group_id, offset=offset)
 
 
@@ -439,6 +453,177 @@ async def on_member_remove_confirm(
         await query.answer(str(exc), show_alert=True)
         return
     await render_members(query, session, user, group_id, offset=0)
+
+
+# ---------- Передача старосты ----------
+
+
+async def render_transfer_members(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+    group_id: int,
+    offset: int,
+) -> None:
+    message = query.message
+    if not isinstance(message, Message):
+        await query.answer()
+        return
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    members = await service.list_members(group)
+    eligible = [
+        (m.user_id, _user_label(m.user))
+        for m in members
+        if m.user_id != user.id
+    ]
+    if not eligible:
+        await query.answer(
+            "Некому передавать старосту — в группе только ты.",
+            show_alert=True,
+        )
+        return
+    chunk = eligible[offset : offset + PAGE_SIZE_MEMBERS]
+    total_pages = max(
+        1, (len(eligible) + PAGE_SIZE_MEMBERS - 1) // PAGE_SIZE_MEMBERS
+    )
+    text = (
+        f"⭐ <b>Передать старосту «{esc(group.name)}»</b>\n\n"
+        "Выбери участника, который станет новым старостой.\n\n"
+        f"Страница {offset // PAGE_SIZE_MEMBERS + 1} из {total_pages}"
+    )
+    await message.edit_text(
+        text,
+        reply_markup=members_keyboard(
+            group.id, chunk, offset, len(eligible), action="trf"
+        ),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_TRANSFER))
+async def on_transfer_request(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    group_id = safe_int(query.data[len(SET_TRANSFER):]) if query.data else None
+    if group_id is None:
+        await query.answer()
+        return
+    await render_transfer_members(query, session, user, group_id, offset=0)
+
+
+@router.callback_query(CallbackDataPrefix(SET_TRANSFER_PAGE))
+async def on_transfer_page(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    if not query.data:
+        await query.answer()
+        return
+    parsed = _page_args(query.data, SET_TRANSFER_PAGE)
+    if parsed is None:
+        await query.answer()
+        return
+    group_id, offset = parsed
+    await render_transfer_members(query, session, user, group_id, offset=offset)
+
+
+@router.callback_query(CallbackDataPrefix(SET_TRANSFER_PICK))
+async def on_transfer_pick(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+) -> None:
+    message = query.message
+    payload = query.data[len(SET_TRANSFER_PICK):] if query.data else ""
+    group_raw, _, target_raw = payload.partition(":")
+    if not isinstance(message, Message) or not group_raw or not target_raw:
+        await query.answer()
+        return
+    try:
+        group_id, target_user_id = int(group_raw), int(target_raw)
+    except ValueError:
+        await query.answer()
+        return
+    if target_user_id == user.id:
+        await query.answer()
+        return
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    if not await service.is_admin(group, user):
+        await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    target_label = next(
+        (
+            _user_label(m.user)
+            for m in await service.list_members(group)
+            if m.user_id == target_user_id
+        ),
+        f"id{target_user_id}",
+    )
+    await message.edit_text(
+        f"⭐ Передать старосту участнику <b>{esc(target_label)}</b>?\n\n"
+        f"Ты перестанешь быть старостой группы «{esc(group.name)}».",
+        reply_markup=transfer_confirm_keyboard(group_id, target_user_id),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(SET_TRANSFER_CONFIRM))
+async def on_transfer_confirm(
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    message = query.message
+    payload = query.data[len(SET_TRANSFER_CONFIRM):] if query.data else ""
+    group_raw, _, target_raw = payload.partition(":")
+    if not isinstance(message, Message) or not group_raw or not target_raw:
+        await query.answer()
+        return
+    try:
+        group_id, target_user_id = int(group_raw), int(target_raw)
+    except ValueError:
+        await query.answer()
+        return
+    service = GroupService(session)
+    group = await GroupRepository(session).get(group_id)
+    if group is None:
+        await query.answer("Группа не найдена.", show_alert=True)
+        return
+    try:
+        await service.transfer_admin(group, actor=user, target_user_id=target_user_id)
+    except GroupError as exc:
+        await query.answer(str(exc), show_alert=True)
+        return
+    await state.clear()
+    target_label = next(
+        (
+            _user_label(m.user)
+            for m in await service.list_members(group)
+            if m.user_id == target_user_id
+        ),
+        f"id{target_user_id}",
+    )
+    await message.edit_text(
+        f"✅ Права старосты «{esc(group.name)}» переданы {esc(target_label)}.\n\n"
+        "Ты теперь обычный участник группы.",
+        reply_markup=main_menu_keyboard(),
+    )
+    await query.answer()
 
 
 # ---------- Выход из группы ----------

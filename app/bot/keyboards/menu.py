@@ -2,6 +2,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.callbacks import MENU_BACK
+from app.bot.formats import clamp_button_text
 from app.database.models import Group
 
 CB_ADD_HOMEWORK = "menu:add_homework"
@@ -48,7 +49,8 @@ def group_picker_keyboard(groups: list[Group]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for group in groups:
         builder.button(
-            text=f"🎓 {group.name}", callback_data=f"{CB_PICK_GROUP_PREFIX}{group.id}"
+            text=clamp_button_text(f"🎓 {group.name}"),
+            callback_data=f"{CB_PICK_GROUP_PREFIX}{group.id}",
         )
     builder.adjust(1)
     return builder.as_markup()
@@ -60,7 +62,8 @@ def join_group_picker_keyboard(
     builder = InlineKeyboardBuilder()
     for group in groups:
         builder.button(
-            text=f"🎓 {group.name}", callback_data=f"{CB_JOIN_PICK}{group.id}"
+            text=clamp_button_text(f"🎓 {group.name}"),
+            callback_data=f"{CB_JOIN_PICK}{group.id}",
         )
     builder.button(
         text=("🔙 В меню" if back_callback == MENU_BACK else "🔙 Назад"),

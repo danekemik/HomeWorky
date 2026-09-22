@@ -12,6 +12,7 @@ from app.bot.callbacks import (
     SKIP,
     SUBJECT_PICK,
 )
+from app.bot.formats import clamp_button_text
 from app.database.models import Subject
 
 
@@ -29,7 +30,7 @@ def subject_picker_keyboard(subjects: list[Subject]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for subject in subjects:
         builder.button(
-            text=f"📚 {subject.name}",
+            text=clamp_button_text(f"📚 {subject.name}"),
             callback_data=f"{SUBJECT_PICK}{subject.id}",
         )
     builder.button(text="➕ Новый предмет", callback_data=f"{SUBJECT_PICK}new")

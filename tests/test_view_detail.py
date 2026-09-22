@@ -270,6 +270,44 @@ async def test_detail_delete_buttons_photos_numbered_and_files_named(session) ->
     ]
 
 
+async def test_delete_buttons_use_global_photo_numbering(session) -> None:
+    user, service, hw = await _seed_homework(session, attachments=1)
+    await service.add_attachment(
+        hw,
+        telegram_file_id="DOC1",
+        file_type=AttachmentType.DOCUMENT,
+        author_id=user.id,
+        file_name="тезисы.pdf",
+    )
+    await service.add_attachment(
+        hw,
+        telegram_file_id="PHOTO2",
+        file_type=AttachmentType.PHOTO,
+        author_id=user.id,
+    )
+    detail = await service.get_detail(hw)
+    photos = [
+        item for item in detail.attachments if item.file_type == AttachmentType.PHOTO
+    ]
+    assert len(photos) == 2
+    doc = next(
+        item for item in detail.attachments if item.file_type == AttachmentType.DOCUMENT
+    )
+    # первое фото не подлежит удалению — кнопки нет, но нумерация глобальная
+    deleteable = {photos[1].id, doc.id}
+    _, markup = _detail_payload(
+        hw, detail, can_modify=True, can_add_files=True, deleteable_attachment_ids=deleteable
+    )
+    labels = [
+        btn.text
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.callback_data is not None
+        and btn.callback_data.startswith(HW_DELETE_FILE)
+    ]
+    assert labels == ["🗑 тезисы.pdf", "🗑 Фото 2"]
+
+
 def test_attachment_delete_confirm_keyboard() -> None:
     markup = attachment_delete_confirm_keyboard(homework_id=7, attachment_id=11)
     rows = markup.inline_keyboard

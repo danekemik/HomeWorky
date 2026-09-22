@@ -352,3 +352,49 @@ async def test_delete_subject_removes_its_homeworks(session) -> None:
     assert [s.id for s in await service.list_subjects(group.id)] == [other.id]
     assert await service.attachments_for(hw) == []
     assert await service.links_for(hw) == []
+
+
+async def test_overdue_lists_past_deadlines_newest_first(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    today = date(2026, 9, 19)
+    service = HomeworkService(session)
+    older = await _make_hw(session, group, subject, owner, today - timedelta(days=3))
+    newer = await _make_hw(session, group, subject, owner, today - timedelta(days=1))
+    await _make_hw(session, group, subject, owner, today)
+
+    overdue = await service.list_overdue(group.id, today)
+
+    assert [hw.id for hw in overdue] == [newer.id, older.id]
+    assert await service.count_overdue(group.id, today) == 2
+    limited = await service.list_overdue(group.id, today, limit=1)
+    assert [hw.id for hw in limited] == [newer.id]
+
+
+async def test_update_homework_clears_description_explicitly(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    assert hw.description == "Стр 10-14"
+    service = HomeworkService(session)
+    await service.update_homework(hw, description=None)
+    assert hw.description is None
+    await service.update_homework(hw, title="Новое")
+    assert hw.description is None
+    assert hw.title == "Новое"
+
+
+async def test_link_count_tracks_links(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    service = HomeworkService(session)
+    assert await service.link_count(hw) == 0
+    await service.add_link(hw, url="https://a.example/1")
+    await service.add_link(hw, url="https://b.example/2")
+    assert await service.link_count(hw) == 2
+    assert HomeworkService.MAX_LINKS == 20
+
+
+async def test_create_subject_collapses_internal_whitespace(session) -> None:
+    group, _owner, _other, _admin, _subject = await _seed(session)
+    service = HomeworkService(session)
+    subject = await service.create_subject(group.id, "  Основы   анализа  ")
+    assert subject.name == "Основы анализа"

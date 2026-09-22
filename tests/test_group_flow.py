@@ -224,3 +224,37 @@ async def test_set_reminder_time(session) -> None:
     assert group.reminder_time == time(19, 30)
     await service.set_reminder_time(group, None)
     assert group.reminder_time is None
+
+
+async def test_transfer_admin_swaps_roles(session) -> None:
+    creator = await _creator(session)
+    service = GroupService(session)
+    group = await service.create_group(creator=creator, name="Передача")
+    member = await _member(session, 5)
+    await service.join_group(group=group, user=member, code=group.invite_code)
+    await service.transfer_admin(group, actor=creator, target_user_id=member.id)
+    assert not await service.is_admin(group, creator)
+    assert await service.is_admin(group, member)
+
+
+async def test_transfer_admin_requires_admin_actor(session) -> None:
+    creator = await _creator(session)
+    group = await GroupService(session).create_group(creator=creator, name="Отказ")
+    member = await _member(session, 6)
+    service = GroupService(session)
+    await service.join_group(group=group, user=member, code=group.invite_code)
+    with pytest.raises(GroupError):
+        await service.transfer_admin(group, actor=member, target_user_id=creator.id)
+
+
+async def test_transfer_admin_forbidden_cases(session) -> None:
+    creator = await _creator(session)
+    group = await GroupService(session).create_group(creator=creator, name="Исключения")
+    member = await _member(session, 7)
+    service = GroupService(session)
+    await service.join_group(group=group, user=member, code=group.invite_code)
+    with pytest.raises(GroupError):
+        await service.transfer_admin(group, actor=creator, target_user_id=creator.id)
+    outsider = await _member(session, 8)
+    with pytest.raises(GroupError):
+        await service.transfer_admin(group, actor=creator, target_user_id=outsider.id)

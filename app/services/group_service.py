@@ -148,6 +148,19 @@ class GroupService:
             raise GroupError("Нельзя удалить создателя группы.")
         await self._groups.remove_membership(group.id, target_user_id)
 
+    async def transfer_admin(
+        self, group: Group, *, actor: User, target_user_id: int
+    ) -> None:
+        """Передаёт старосту: actor становится участником, target — старостой."""
+        if not await self.is_admin(group, actor):
+            raise GroupError("Это доступно только старосте группы.")
+        if actor.id == target_user_id:
+            raise GroupError("Нельзя передать права самому себе.")
+        if await self._groups.get_membership(group.id, target_user_id) is None:
+            raise GroupError("Этот пользователь не участник группы.")
+        await self._groups.set_role(group.id, actor.id, MemberRole.MEMBER)
+        await self._groups.set_role(group.id, target_user_id, MemberRole.ADMIN)
+
     async def leave_group(self, group: Group, user: User) -> None:
         """Участник выходит из группы сам. Единственный староста выйти не может."""
         membership = await self._groups.get_membership(group.id, user.id)

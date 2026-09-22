@@ -21,6 +21,7 @@ async def run_reminder_loop(bot: Bot, database: Database, cfg: Settings) -> None
     если оно задано, иначе — глобальное REMINDER_TIME из настроек.
     """
     last_cleanup: date | None = None
+    last_sent: dict[int, date] = {}
     while True:
         now = datetime.now(cfg.tz)
         if last_cleanup != now.date():
@@ -41,7 +42,8 @@ async def run_reminder_loop(bot: Bot, database: Database, cfg: Settings) -> None
         if last_cleanup != now.date():
             await _try_cleanup(database, now.date())
             last_cleanup = now.date()
-        await _try_send(bot, database, now, groups, cfg)
+        groups = await _bound_groups(database)
+        await _try_send(bot, database, now, groups, cfg, last_sent)
 
 
 async def _try_cleanup(database: Database, today: date) -> None:
@@ -52,10 +54,15 @@ async def _try_cleanup(database: Database, today: date) -> None:
 
 
 async def _try_send(
-    bot: Bot, database: Database, now: datetime, groups: list[Group], cfg: Settings
+    bot: Bot,
+    database: Database,
+    now: datetime,
+    groups: list[Group],
+    cfg: Settings,
+    last_sent: dict[int, date],
 ) -> None:
     try:
-        await _send_tomorrow_digests(bot, database, now, groups, cfg)
+        await _send_tomorrow_digests(bot, database, now, groups, cfg, last_sent)
     except Exception:
         logger.exception("Не удалось выполнить вечернюю рассылку")
 
@@ -90,15 +97,23 @@ async def _send_tomorrow_digests(
     now: datetime,
     groups: list[Group],
     cfg: Settings,
+    last_sent: dict[int, date] | None = None,
 ) -> None:
-    """Шлёт дайджест группам, чьё время напоминания совпало с now."""
+    """Шлёт дайджест группам, чьё время напоминания уже наступило.
+
+    last_sent защищает от повторной рассылки одной группе в течение суток
+    (например, если цикл проснулся позже запланированного времени).
+    """
+    last_sent = last_sent or {}
     target = now.date() + timedelta(days=1)
     due = (now.hour, now.minute)
     async with database.session_factory() as session:
         service = NotificationService(session)
         for group in groups:
             scheduled = group.reminder_time or cfg.reminder_time
-            if (scheduled.hour, scheduled.minute) != due:
+            if due < (scheduled.hour, scheduled.minute):
+                continue
+            if last_sent.get(group.id) == now.date():
                 continue
             items = await service.collect_digest(group.id, target)
             text = service.build_digest_text(target, items)
@@ -106,6 +121,7 @@ async def _send_tomorrow_digests(
                 continue
             try:
                 await bot.send_message(group.telegram_chat_id, text)
+                last_sent[group.id] = now.date()
                 await asyncio.sleep(0.05)
             except TelegramAPIError as exc:
                 logger.warning(

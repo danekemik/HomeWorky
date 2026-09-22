@@ -543,6 +543,22 @@ async def on_attachment_message(
                 "(скопируй URL и отправь как текст)."
             )
             return
+        homework_id = data.get("homework_id")
+        if homework_id is not None:
+            homework = await session.get(Homework, int(homework_id))
+            if homework is None:
+                await message.answer("Задание не найдено. Нажми «✅ Готово».")
+                return
+            existing_links = await HomeworkService(session).link_count(homework)
+        else:
+            existing_links = 0
+        pending_links = len(data.get("links", []))
+        if existing_links + pending_links >= HomeworkService.MAX_LINKS:
+            await message.answer(
+                f"Лимит — {HomeworkService.MAX_LINKS} ссылки на задание. "
+                "Можно добавить файлы или нажми «✅ Готово»."
+            )
+            return
         data.setdefault("links", []).append({"url": url, "title": None})
         await state.update_data(**data)
         await message.answer(
@@ -1000,6 +1016,7 @@ async def on_pending_field_pick(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
+    data = dict(await state.get_data())
     field = query.data[len(PENDING_FIELD):]
     if field == "subject":
         await state.update_data(fields=False)
@@ -1022,10 +1039,11 @@ async def on_pending_field_pick(
             DEADLINE_PENDING, reply_markup=build_calendar_markup(bot_today())
         )
     elif field == "attachment":
-        await state.update_data(fields=False, attachments=[], links=[])
+        await state.update_data(fields=False)
+        has = bool(data.get("attachments") or data.get("links"))
         await state.set_state(HomeworkCreation.attachment)
         await query.message.edit_text(
-            ATTACH_PENDING, reply_markup=attachment_keyboard(False)
+            ATTACH_PENDING, reply_markup=attachment_keyboard(has)
         )
     await query.answer()
 

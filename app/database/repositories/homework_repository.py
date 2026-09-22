@@ -109,6 +109,36 @@ class HomeworkRepository(BaseRepository[Homework]):
         )
         return list((await self._session.scalars(stmt)).all())
 
+    async def list_overdue(
+        self,
+        group_id: int,
+        today: date,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Homework]:
+        # Сначала самые свежие из пропущенных.
+        stmt = (
+            select(Homework)
+            .where(
+                Homework.group_id == group_id,
+                Homework.deadline < today,
+            )
+            .order_by(Homework.deadline.desc(), Homework.id.desc())
+        )
+        if offset:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list((await self._session.scalars(stmt)).all())
+
+    async def count_overdue(self, group_id: int, today: date) -> int:
+        stmt = select(func.count(Homework.id)).where(
+            Homework.group_id == group_id,
+            Homework.deadline < today,
+        )
+        return int((await self._session.scalar(stmt)) or 0)
+
     async def list_created_by(
         self,
         group_id: int,
@@ -245,6 +275,12 @@ class HomeworkRepository(BaseRepository[Homework]):
     async def count_attachments(self, homework_id: int) -> int:
         stmt = select(func.count(Attachment.id)).where(
             Attachment.homework_id == homework_id
+        )
+        return int((await self._session.scalar(stmt)) or 0)
+
+    async def count_links(self, homework_id: int) -> int:
+        stmt = select(func.count(HomeworkLink.id)).where(
+            HomeworkLink.homework_id == homework_id
         )
         return int((await self._session.scalar(stmt)) or 0)
 

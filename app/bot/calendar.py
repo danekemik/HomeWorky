@@ -51,10 +51,23 @@ def build_calendar_markup(
 ) -> InlineKeyboardMarkup:
     today = today or datetime.now(settings.tz).date()
     header = _month_header(cursor)
+    month_start = date(cursor.year, cursor.month, 1)
+    min_month = date(today.year, today.month, 1)
+    max_month = date(today.year + 1, today.month, 1)
+    prev_cb = (
+        _prev_period(cursor.year, cursor.month)
+        if month_start > min_month
+        else f"{CALENDAR}noop"
+    )
+    next_cb = (
+        _next_period(cursor.year, cursor.month)
+        if month_start < max_month
+        else f"{CALENDAR}noop"
+    )
     top = [
-        InlineKeyboardButton(text="‹", callback_data=_prev_period(cursor.year, cursor.month)),
+        InlineKeyboardButton(text="‹", callback_data=prev_cb),
         InlineKeyboardButton(text=header, callback_data=f"{CALENDAR}noop"),
-        InlineKeyboardButton(text="›", callback_data=_next_period(cursor.year, cursor.month)),
+        InlineKeyboardButton(text="›", callback_data=next_cb),
     ]
     days = _available_days(cursor, today)
     grid = [

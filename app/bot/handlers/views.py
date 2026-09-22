@@ -35,6 +35,7 @@ from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import (
     bot_today,
     build_homework_card,
+    clamp_button_text,
     esc,
     format_date_russian,
     format_homework_label,
@@ -57,7 +58,7 @@ from app.bot.keyboards.views import (
 )
 from app.bot.messages import NO_GROUP_TEXT
 from app.bot.render import edit_or_resend
-from app.bot.states.homework import HomeworkEditField
+from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import Attachment, AttachmentType, Homework, User
 from app.dates import russian_month_name_short
 from app.services.homework_service import (
@@ -73,6 +74,7 @@ _CATEGORY_TITLES = {
     "past": "📜 Прошедшие задания (за неделю)",
     "active": "🔥 Актуальные задания",
     "mine": "👤 Созданные мной",
+    "overdue": "⚠ Просроченные задания",
 }
 
 EMPTY_LINE = "  — заданий нет"
@@ -148,7 +150,9 @@ def _date_ru(day: date) -> str:
 
 def _homework_label(homework: Homework, subject_names: dict[int, str]) -> str:
     subject = subject_names.get(homework.subject_id, "—")
-    return format_homework_label(subject, homework.title, homework.deadline)
+    return clamp_button_text(
+        format_homework_label(subject, homework.title, homework.deadline)
+    )
 
 
 async def _list_homeworks(
@@ -167,6 +171,8 @@ async def _list_homeworks(
         return await service.list_created_by(
             group_id, author_id, limit=limit, offset=offset
         )
+    if category == "overdue":
+        return await service.list_overdue(group_id, today, limit=limit, offset=offset)
     return await service.list_active(group_id, today, limit=limit, offset=offset)
 
 
@@ -181,6 +187,8 @@ async def _count_homeworks(
         return await service.count_past(group_id, today)
     if category == "mine":
         return await service.count_created_by(group_id, author_id)
+    if category == "overdue":
+        return await service.count_overdue(group_id, today)
     return await service.count_active(group_id, today)
 
 
@@ -226,16 +234,17 @@ def _detail_payload(
     delete_buttons: list[InlineKeyboardButton] = []
     photo_number = 0
     for item in detail.attachments:
+        if item.file_type == AttachmentType.PHOTO:
+            photo_number += 1
         if item.id not in deleteable_attachment_ids:
             continue
         if item.file_type == AttachmentType.PHOTO:
-            photo_number += 1
             label = f"🗑 Фото {photo_number}"
         else:
             label = f"🗑 {item.file_name or 'Файл'}"
         delete_buttons.append(
             InlineKeyboardButton(
-                text=esc(label),
+                text=clamp_button_text(label),
                 callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
             )
         )
@@ -455,7 +464,7 @@ async def on_nearest_deadlines(
             subject = subject_names.get(item.subject_id, "—")
             lines.extend([f"{index}. {esc(subject)}", esc(item.title)])
             builder.button(
-                text=f"{subject} — {item.title}",
+                text=clamp_button_text(f"{subject} — {item.title}"),
                 callback_data=f"{HW_DETAIL}{item.id}",
             )
 
@@ -634,7 +643,12 @@ async def on_homework_detail(
     if homework is None:
         await query.answer("Задание не найдено.", show_alert=True)
         return
-    await state.clear()
+    state_name = await state.get_state()
+    if state_name is None or not (
+        state_name.startswith(HomeworkCreation.__name__)
+        or state_name.startswith(HomeworkEditField.__name__)
+    ):
+        await state.clear()
     await _open_detail(
         query.message, bot, session, user, service, homework
     )
@@ -926,6 +940,7 @@ async def on_edit_field(
         return
     prompt, next_state = prompts[field]
     await state.set_state(next_state)
+    await state.update_data(prompt_message_id=query.message.message_id)
     if field == "deadline":
         await query.message.edit_text(
             prompt, reply_markup=build_calendar_markup(bot_today())
@@ -954,6 +969,7 @@ async def _apply_text_field(
 ) -> None:
     data = await state.get_data()
     homework_id = data.get("homework_id")
+    prompt_message_id = data.get("prompt_message_id")
     group = await resolve_group(bot, session, user, message.chat, state)
     if group is None or homework_id is None:
         await state.clear()
@@ -981,6 +997,14 @@ async def _apply_text_field(
             return
         await service.update_homework(homework, description=value)
     await state.clear()
+    if (
+        isinstance(prompt_message_id, int)
+        and prompt_message_id != message.message_id
+    ):
+        try:
+            await bot.delete_message(message.chat.id, prompt_message_id)
+        except Exception:
+            pass
     await _send_edited_detail(message, bot, session, user, service, homework)
 
 

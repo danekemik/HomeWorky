@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     REDIS_URL: str | None = None
     TIMEZONE: str = "Europe/Moscow"
     REMINDER_TIME: str = "20:00"
-    DEADLINE_MORNING_TIME: str = "09:00"
     INVITE_CODE_TTL_DAYS: int = 3
     LOG_LEVEL: str = "INFO"
     RATE_LIMIT_MESSAGES_PER_SEC: float = 10.0
