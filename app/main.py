@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from app.bot.main import create_bot, create_dispatcher
@@ -18,14 +19,19 @@ def configure_logging() -> None:
 
 
 async def _register_commands(bot: Bot) -> None:
-    await bot.set_my_commands(
-        [
-            BotCommand(command="menu", description="🏠 Открыть меню"),
-            BotCommand(command="start", description="🚀 Перезапустить бота"),
-            BotCommand(command="help", description="❓ Помощь"),
-        ],
-        scope=BotCommandScopeAllPrivateChats(),
-    )
+    try:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="menu", description="🏠 Открыть меню"),
+                BotCommand(command="start", description="🚀 Перезапустить бота"),
+                BotCommand(command="help", description="❓ Помощь"),
+            ],
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+    except TelegramNetworkError:
+        logging.warning(
+            "Не удалось зарегистрировать команды меню (сеть недоступна), продолжаю без них"
+        )
 
 
 async def main() -> None:

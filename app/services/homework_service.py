@@ -216,21 +216,6 @@ class HomeworkService:
             group_id, start, today - timedelta(days=1)
         )
 
-    async def list_overdue(
-        self,
-        group_id: int,
-        today: date,
-        *,
-        limit: int | None = None,
-        offset: int = 0,
-    ) -> list[Homework]:
-        return await self._repo.list_overdue(
-            group_id, today, limit=limit, offset=offset
-        )
-
-    async def count_overdue(self, group_id: int, today: date) -> int:
-        return await self._repo.count_overdue(group_id, today)
-
     async def list_created_by(
         self,
         group_id: int,

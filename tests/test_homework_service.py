@@ -354,22 +354,6 @@ async def test_delete_subject_removes_its_homeworks(session) -> None:
     assert await service.links_for(hw) == []
 
 
-async def test_overdue_lists_past_deadlines_newest_first(session) -> None:
-    group, owner, _other, _admin, subject = await _seed(session)
-    today = date(2026, 9, 19)
-    service = HomeworkService(session)
-    older = await _make_hw(session, group, subject, owner, today - timedelta(days=3))
-    newer = await _make_hw(session, group, subject, owner, today - timedelta(days=1))
-    await _make_hw(session, group, subject, owner, today)
-
-    overdue = await service.list_overdue(group.id, today)
-
-    assert [hw.id for hw in overdue] == [newer.id, older.id]
-    assert await service.count_overdue(group.id, today) == 2
-    limited = await service.list_overdue(group.id, today, limit=1)
-    assert [hw.id for hw in limited] == [newer.id]
-
-
 async def test_update_homework_clears_description_explicitly(session) -> None:
     group, owner, _other, _admin, subject = await _seed(session)
     hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))

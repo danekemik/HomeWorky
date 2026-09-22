@@ -74,7 +74,6 @@ _CATEGORY_TITLES = {
     "past": "📜 Прошедшие задания (за неделю)",
     "active": "🔥 Актуальные задания",
     "mine": "👤 Созданные мной",
-    "overdue": "⚠ Просроченные задания",
 }
 
 EMPTY_LINE = "  — заданий нет"
@@ -171,8 +170,6 @@ async def _list_homeworks(
         return await service.list_created_by(
             group_id, author_id, limit=limit, offset=offset
         )
-    if category == "overdue":
-        return await service.list_overdue(group_id, today, limit=limit, offset=offset)
     return await service.list_active(group_id, today, limit=limit, offset=offset)
 
 
@@ -187,8 +184,6 @@ async def _count_homeworks(
         return await service.count_past(group_id, today)
     if category == "mine":
         return await service.count_created_by(group_id, author_id)
-    if category == "overdue":
-        return await service.count_overdue(group_id, today)
     return await service.count_active(group_id, today)
 
 

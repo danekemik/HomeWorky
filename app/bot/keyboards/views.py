@@ -20,7 +20,6 @@ def homeworks_category_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="📜 Прошедшие", callback_data=VIEWS + "past")
     builder.button(text="🔥 Актуальные", callback_data=VIEWS + "active")
     builder.button(text="👤 Созданные мной", callback_data=VIEWS + "mine")
-    builder.button(text="⚠ Просроченные", callback_data=VIEWS + "overdue")
     builder.row(InlineKeyboardButton(text="🔙 В меню", callback_data=MENU_BACK))
     builder.adjust(1)
     return builder.as_markup()
