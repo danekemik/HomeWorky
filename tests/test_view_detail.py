@@ -239,15 +239,15 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     assert "📎 Файлы" in text
 
 
-def test_card_files_collapsed_to_single_line() -> None:
+def test_card_files_each_on_own_line() -> None:
     text = build_homework_card(
         subject="Математика",
         title="Задачи",
         deadline=date(2026, 9, 25),
-        attachment_lines=["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"],
+        attachment_lines=["a.pdf", "b.pdf", "🖼 Фото"],
         attachment_limit=10,
     )
-    assert "📎 Файлы (5/10): a.pdf · b.pdf · c.pdf · и ещё 2" in text
+    assert "\n\n📎 Файлы (3/10):\n  • a.pdf\n  • b.pdf\n  • 🖼 Фото" in text
 
 
 async def test_delete_last_file_edits_buttons_message(session) -> None:

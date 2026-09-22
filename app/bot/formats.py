@@ -51,10 +51,8 @@ def build_homework_card(
         header = "📎 Файлы"
         if attachment_limit is not None:
             header = f"{header} ({len(attachments)}/{attachment_limit})"
-        shown = attachments[:3]
-        rest = len(attachments) - len(shown)
-        suffix = f" · и ещё {rest}" if rest else ""
-        lines.append(f"{header}: " + " · ".join(esc(line) for line in shown) + suffix)
+        lines += ["", f"{header}:"]
+        lines += [f"  • {esc(line)}" for line in attachments]
     links = link_lines or []
     if links:
         lines += ["", "🔗 Ссылки:"]
