@@ -150,27 +150,38 @@ def members_keyboard(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for user_id, label in members:
-        builder.button(
-            text=f"👤 {label}",
-            callback_data=SET_NOOP,
+        builder.row(
+            InlineKeyboardButton(
+                text=f"👤 {label}",
+                callback_data=SET_NOOP,
+            ),
+            InlineKeyboardButton(
+                text="🗑",
+                callback_data=f"{SET_MEMBER_REMOVE}{group_id}:{user_id}",
+            ),
         )
-        builder.button(
-            text="🗑",
-            callback_data=f"{SET_MEMBER_REMOVE}{group_id}:{user_id}",
+    builder.row(
+        InlineKeyboardButton(
+            text="🔙 Управление", callback_data=f"{SET_MANAGE_GROUP}{group_id}"
         )
-        builder.adjust(2)
-    builder.button(text="🔙 Управление", callback_data=f"{SET_MANAGE_GROUP}{group_id}")
+    )
+    nav: list[InlineKeyboardButton] = []
     if offset > 0:
-        builder.button(
-            text="◀️",
-            callback_data=f"{SET_MEMBER_PAGE}{group_id}:{max(0, offset - PAGE_SIZE_MEMBERS)}",
+        nav.append(
+            InlineKeyboardButton(
+                text="◀️",
+                callback_data=f"{SET_MEMBER_PAGE}{group_id}:{max(0, offset - PAGE_SIZE_MEMBERS)}",
+            )
         )
     if offset + PAGE_SIZE_MEMBERS < total_count:
-        builder.button(
-            text="▶️",
-            callback_data=f"{SET_MEMBER_PAGE}{group_id}:{offset + PAGE_SIZE_MEMBERS}",
+        nav.append(
+            InlineKeyboardButton(
+                text="▶️",
+                callback_data=f"{SET_MEMBER_PAGE}{group_id}:{offset + PAGE_SIZE_MEMBERS}",
+            )
         )
-    builder.adjust(1)
+    if nav:
+        builder.row(*nav)
     return builder.as_markup()
 
 

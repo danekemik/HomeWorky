@@ -278,6 +278,24 @@ def test_attachment_delete_confirm_keyboard() -> None:
     assert rows[0][1].text == "❌ Нет"
 
 
+def test_members_keyboard_delete_button_next_to_each_member() -> None:
+    from app.bot.keyboards.settings import members_keyboard
+
+    markup = members_keyboard(
+        group_id=5,
+        members=[(11, "Аня"), (22, "Боря")],
+        offset=0,
+        total_count=2,
+    )
+    rows = markup.inline_keyboard
+    assert len(rows[0]) == 2
+    assert rows[0][0].text == "👤 Аня"
+    assert rows[0][1].text == "🗑"
+    assert rows[0][1].callback_data == "set:rm:5:11"
+    assert len(rows[1]) == 2
+    assert rows[1][1].callback_data == "set:rm:5:22"
+
+
 def test_card_files_each_on_own_line() -> None:
     text = build_homework_card(
         subject="Математика",
