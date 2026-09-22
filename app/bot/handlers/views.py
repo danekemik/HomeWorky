@@ -22,6 +22,7 @@ from app.bot.callbacks import (
     HW_DELETE,
     HW_DELETE_CONFIRM,
     HW_DELETE_FILE,
+    HW_DELETE_FILE_CONFIRM,
     HW_DETAIL,
     HW_EDIT,
     HW_EDIT_FIELD,
@@ -48,6 +49,7 @@ from app.bot.keyboards.homework import (
 from app.bot.keyboards.menu import CB_ALL_TASKS, CB_NEAREST_DEADLINES
 from app.bot.keyboards.views import (
     PAGE_SIZE,
+    attachment_delete_confirm_keyboard,
     homework_delete_confirm_keyboard,
     homework_edit_field_keyboard,
     homework_list_keyboard,
@@ -221,14 +223,22 @@ def _detail_payload(
                 callback_data=f"{HW_ADD_FILES}{homework.id}",
             )
         )
-    delete_buttons = [
-        InlineKeyboardButton(
-            text=f"🗑 {esc(item.file_name or 'Файл')}",
-            callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
+    delete_buttons: list[InlineKeyboardButton] = []
+    photo_number = 0
+    for item in detail.attachments:
+        if item.id not in deleteable_attachment_ids:
+            continue
+        if item.file_type == AttachmentType.PHOTO:
+            photo_number += 1
+            label = f"🗑 Фото {photo_number}"
+        else:
+            label = f"🗑 {item.file_name or 'Файл'}"
+        delete_buttons.append(
+            InlineKeyboardButton(
+                text=esc(label),
+                callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
+            )
         )
-        for item in detail.attachments
-        if item.id in deleteable_attachment_ids
-    ]
     for index in range(0, len(delete_buttons), 2):
         builder.row(*delete_buttons[index : index + 2])
     builder.row(
@@ -769,6 +779,64 @@ async def on_delete_file(
         await query.answer()
         return
     payload = query.data[len(HW_DELETE_FILE):]
+    homework_raw, _, attachment_raw = payload.partition(":")
+    if not homework_raw or not attachment_raw:
+        await query.answer()
+        return
+    try:
+        homework_id, attachment_id = int(homework_raw), int(attachment_raw)
+    except ValueError:
+        await query.answer()
+        return
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
+        await query.answer("Задание не найдено.", show_alert=True)
+        return
+    attachments = await service.attachments_for(homework)
+    attachment = next(
+        (item for item in attachments if item.id == attachment_id), None
+    )
+    if attachment is None:
+        await query.answer("Файл не найден.", show_alert=True)
+        return
+    if not await service.can_delete_attachment(
+        user, group.id, homework, attachment
+    ):
+        await query.answer(
+            "Удалить этот файл может его автор, автор задания или староста.",
+            show_alert=True,
+        )
+        return
+    if attachment.file_type == AttachmentType.PHOTO:
+        confirm_text = "🗑 Удалить фото?"
+    else:
+        name = esc(attachment.file_name or "Файл")
+        confirm_text = f"🗑 Удалить файл «{name}»?"
+    await edit_or_resend(
+        query.message,
+        confirm_text,
+        markup=attachment_delete_confirm_keyboard(homework_id, attachment_id),
+    )
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(HW_DELETE_FILE_CONFIRM))
+async def on_delete_file_confirm(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    payload = query.data[len(HW_DELETE_FILE_CONFIRM):]
     homework_raw, _, attachment_raw = payload.partition(":")
     if not homework_raw or not attachment_raw:
         await query.answer()

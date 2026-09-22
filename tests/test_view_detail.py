@@ -4,13 +4,14 @@ from typing import Any
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
-from app.bot.callbacks import DETAIL_BACK, HW_DELETE_FILE
+from app.bot.callbacks import DETAIL_BACK, HW_DELETE_FILE, HW_DELETE_FILE_CONFIRM
 from app.bot.formats import build_homework_card
 from app.bot.handlers.views import (
     _attachment_send_plan,
     _detail_payload,
     _open_detail,
 )
+from app.bot.keyboards.views import attachment_delete_confirm_keyboard
 from app.database.models import Attachment, AttachmentType
 from app.database.repositories.homework_repository import HomeworkRepository
 from app.database.repositories.subject_repository import SubjectRepository
@@ -232,11 +233,49 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     ]
     assert len(delete_rows) == 1
     assert len(delete_rows[0]) == 2
+    delete_labels = {btn.text for btn in delete_rows[0]}
+    assert delete_labels == {"🗑 Фото 1", "🗑 Фото 2"}
     back = rows[-1][0]
     assert back.text == "🔙 К списку"
     assert back.callback_data == f"{DETAIL_BACK}{hw.id}"
     assert "🔗" not in text
     assert "📎 Файлы" in text
+
+
+async def test_detail_delete_buttons_photos_numbered_and_files_named(session) -> None:
+    user, service, hw = await _seed_homework(session, attachments=2)
+    await service.add_attachment(
+        hw,
+        telegram_file_id="DOC1",
+        file_type=AttachmentType.DOCUMENT,
+        author_id=user.id,
+        file_name="задание.pdf",
+    )
+    detail = await service.get_detail(hw)
+    deleteable = {item.id for item in detail.attachments}
+    _, markup = _detail_payload(
+        hw, detail, can_modify=True, can_add_files=True, deleteable_attachment_ids=deleteable
+    )
+    buttons = [
+        btn
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.callback_data is not None
+        and btn.callback_data.startswith(HW_DELETE_FILE)
+    ]
+    assert [btn.text for btn in buttons] == [
+        "🗑 Фото 1",
+        "🗑 Фото 2",
+        "🗑 задание.pdf",
+    ]
+
+
+def test_attachment_delete_confirm_keyboard() -> None:
+    markup = attachment_delete_confirm_keyboard(homework_id=7, attachment_id=11)
+    rows = markup.inline_keyboard
+    assert rows[0][0].text == "🗑 Да, удалить"
+    assert rows[0][0].callback_data == f"{HW_DELETE_FILE_CONFIRM}7:11"
+    assert rows[0][1].text == "❌ Нет"
 
 
 def test_card_files_each_on_own_line() -> None:

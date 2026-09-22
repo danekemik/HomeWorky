@@ -3,6 +3,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.callbacks import (
     HW_DELETE_CONFIRM,
+    HW_DELETE_FILE_CONFIRM,
     HW_DETAIL,
     HW_EDIT_FIELD,
     MENU_BACK,
@@ -59,6 +60,19 @@ def homework_edit_field_keyboard(homework_id: int | None = None) -> InlineKeyboa
 def homework_delete_confirm_keyboard(homework_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🗑 Да, удалить", callback_data=f"{HW_DELETE_CONFIRM}{homework_id}")
+    builder.button(text="❌ Нет", callback_data=f"{HW_DETAIL}{homework_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def attachment_delete_confirm_keyboard(
+    homework_id: int, attachment_id: int
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🗑 Да, удалить",
+        callback_data=f"{HW_DELETE_FILE_CONFIRM}{homework_id}:{attachment_id}",
+    )
     builder.button(text="❌ Нет", callback_data=f"{HW_DETAIL}{homework_id}")
     builder.adjust(2)
     return builder.as_markup()
