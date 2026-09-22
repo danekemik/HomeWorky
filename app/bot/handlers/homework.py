@@ -234,17 +234,10 @@ async def on_subject_pick(
             await query.answer("Только автор или модератор может менять.", show_alert=True)
             return
         await service.set_subject(homework, subject_id)
-        from app.bot.handlers.views import render_homework_detail
+        from app.bot.handlers.views import _finish_edit
 
-        await render_homework_detail(
-            message=message,
-            bot=bot,
-            session=session,
-            user=user,
-            state=state,
-            homework_id=homework.id,
-        )
         await state.clear()
+        await _finish_edit(message, bot, session, service, homework, user)
         await query.answer()
         return
 
@@ -327,17 +320,9 @@ async def on_new_subject(
             return
         await service.set_subject(homework, subject_id)
         await state.clear()
-        detail = await service.get_detail(homework)
-        from app.bot.handlers.views import _detail_payload
+        from app.bot.handlers.views import _send_edited_detail
 
-        text, markup = _detail_payload(
-            homework,
-            detail,
-            True,
-            True,
-            {item.id for item in detail.attachments},
-        )
-        await message.answer(text, reply_markup=markup)
+        await _send_edited_detail(message, bot, session, user, service, homework)
     elif (await state.get_data()).get("from_fields"):
         await _render_preview_message(message, state, answer=True)
     else:
@@ -424,11 +409,35 @@ async def on_calendar(
         return
 
     if _is_base_edit(state_name):
-        await state.update_data(deadline=chosen.isoformat())
-        await state.set_state(HomeworkEditField.attachment)
-        await query.message.edit_text(
-            ATTACH_PENDING, reply_markup=attachment_keyboard(False)
+        data = await state.get_data()
+        homework_id = data.get("homework_id")
+        service = HomeworkService(session)
+        group = await resolve_group(
+            bot, session, user, query.message.chat, state
         )
+        if group is None or homework_id is None:
+            await state.clear()
+            await query.answer(NO_GROUP_TEXT, show_alert=True)
+            return
+        homework = await service.get_for_group(
+            int(homework_id), group.id
+        )
+        if homework is None:
+            await state.clear()
+            await query.answer("Задание не найдено.", show_alert=True)
+            return
+        if not await service.can_modify(user, group.id, homework):
+            await state.clear()
+            await query.answer(
+                "Только автор или модератор может менять.", show_alert=True
+            )
+            return
+        homework.deadline = chosen
+        await session.flush()
+        await state.clear()
+        from app.bot.handlers.views import _finish_edit
+
+        await _finish_edit(query.message, bot, session, service, homework, user)
         await query.answer()
         return
 

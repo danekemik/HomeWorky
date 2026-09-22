@@ -410,39 +410,6 @@ def _album_media(
     return documents
 
 
-async def render_homework_detail(
-    *,
-    message: Message,
-    bot: Bot,
-    session: AsyncSession,
-    user: User,
-    state: FSMContext,
-    homework_id: int,
-) -> bool:
-    group = await resolve_group(bot, session, user, message.chat, state)
-    if group is None:
-        return False
-    service = HomeworkService(session)
-    homework = await service.get_for_group(homework_id, group.id)
-    if homework is None:
-        return False
-    detail = await service.get_detail(homework)
-    can_modify = await service.can_modify(user, group.id, homework)
-    can_add_files = await service.is_member(user, group.id)
-    deleteables = await _deleteable_attachment_ids(
-        service, user, homework, detail
-    )
-    text, markup = _detail_payload(
-        homework,
-        detail,
-        can_modify,
-        can_add_files,
-        deleteables,
-    )
-    await message.edit_text(text, reply_markup=markup)
-    return True
-
-
 @router.callback_query(CallbackDataPrefix(CB_NEAREST_DEADLINES))
 async def on_nearest_deadlines(
     query: CallbackQuery,
@@ -1014,17 +981,7 @@ async def _apply_text_field(
             return
         await service.update_homework(homework, description=value)
     await state.clear()
-    detail = await service.get_detail(homework)
-    if detail.attachments:
-        await _open_detail(
-            message, bot, session, user, service, homework, delete_source=False
-        )
-        return
-    deleteables = {item.id for item in detail.attachments}
-    text, markup = _detail_payload(
-        homework, detail, True, True, deleteables
-    )
-    await message.answer(text, reply_markup=markup)
+    await _send_edited_detail(message, bot, session, user, service, homework)
 
 
 @router.message(StateFilter(HomeworkEditField.title))
@@ -1090,6 +1047,34 @@ async def _finish_edit(
         deleteables,
     )
     await message.edit_text(text, reply_markup=markup)
+
+
+async def _send_edited_detail(
+    message: Message,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    service: HomeworkService,
+    homework: Homework,
+) -> None:
+    """Показывает отредактированное дз новым сообщением (источник не удаляя)."""
+    detail = await service.get_detail(homework)
+    if detail.attachments:
+        await _open_detail(
+            message,
+            bot,
+            session,
+            user,
+            service,
+            homework,
+            delete_source=False,
+        )
+        return
+    deleteables = {item.id for item in detail.attachments}
+    text, markup = _detail_payload(
+        homework, detail, True, True, deleteables
+    )
+    await message.answer(text, reply_markup=markup)
 
 
 async def apply_edit_field(
