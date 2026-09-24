@@ -3,23 +3,22 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.enums import ParseMode
 from app.bot.callbacks import (
     DETAIL_BACK,
     HW_DELETE_FILE,
     HW_DELETE_FILE_CONFIRM,
     HW_FOLDER_BACK,
+    HW_OPEN_FILE,
     HW_OPEN_FOLDER,
 )
 from app.bot.formats import build_homework_card, plural_files
 from app.bot.handlers.views import (
-    _attachment_send_plan,
     _detail_payload,
     _folder_payload,
     _open_detail,
 )
 from app.bot.keyboards.views import attachment_delete_confirm_keyboard
-from app.database.models import Attachment, AttachmentType
+from app.database.models import AttachmentType
 from app.database.repositories.homework_repository import HomeworkRepository
 from app.database.repositories.subject_repository import SubjectRepository
 from app.database.repositories.user_repository import UserRepository
@@ -122,28 +121,7 @@ async def _seed_homework(session, *, attachments: int) -> Any:
     return user, service, hw
 
 
-def _attach(file_type: AttachmentType) -> Attachment:
-    return Attachment(telegram_file_id="f", file_type=file_type)
-
-
-def test_attachment_send_plan_groups_by_type_and_chunks() -> None:
-    photos = [_attach(AttachmentType.PHOTO) for _ in range(3)]
-    assert _attachment_send_plan(photos) == [("album", photos)]
-
-    one_photo = photos[:1]
-    docs = [_attach(AttachmentType.DOCUMENT) for _ in range(2)]
-    assert _attachment_send_plan(one_photo + docs) == [
-        ("single", one_photo),
-        ("album", docs),
-    ]
-
-    eleven = [_attach(AttachmentType.PHOTO) for _ in range(11)]
-    ops = _attachment_send_plan(eleven)
-    assert ops[0] == ("album", eleven[:10])
-    assert ops[1] == ("single", eleven[10:])
-
-
-async def test_open_detail_many_photos_go_in_one_album(session) -> None:
+async def test_open_detail_many_photos_keep_card_without_media(session) -> None:
     chat_id = 9001
     user, service, hw = await _seed_homework(session, attachments=3)
     recording = RecordingSession()
@@ -153,24 +131,13 @@ async def test_open_detail_many_photos_go_in_one_album(session) -> None:
     await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
 
     names = recording.names()
-    assert names == ["DeleteMessage", "SendMediaGroup", "SendMessage"]
-    album = next(
-        call for call in recording.calls if type(call).__name__ == "SendMediaGroup"
-    )
-    assert len(album.media) == 3
-    first = album.media[0]
-    assert first.caption is not None
-    assert "Задачи №1-20" in first.caption
-    assert first.parse_mode == ParseMode.HTML
-    assert album.media[1].caption is None
-    assert album.media[2].caption is None
-    buttons = next(
-        call for call in recording.calls if type(call).__name__ == "SendMessage"
-    )
-    assert buttons.reply_markup is not None
+    assert names == ["EditMessageText"]
+    assert "SendMediaGroup" not in names
+    assert "SendPhoto" not in names
+    assert "SendDocument" not in names
 
 
-async def test_open_detail_single_file_sends_media_and_buttons(session) -> None:
+async def test_open_detail_single_file_keeps_card_without_media(session) -> None:
     chat_id = 9002
     user, service, hw = await _seed_homework(session, attachments=1)
     recording = RecordingSession()
@@ -180,21 +147,12 @@ async def test_open_detail_single_file_sends_media_and_buttons(session) -> None:
     await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
 
     names = recording.names()
-    assert names == ["DeleteMessage", "SendPhoto", "SendMessage"]
-    photo = next(
-        call for call in recording.calls if type(call).__name__ == "SendPhoto"
-    )
-    assert photo.caption is not None
-    assert "Задачи №1-20" in photo.caption
-    assert photo.reply_markup is None
-    message = next(
-        call for call in recording.calls if type(call).__name__ == "SendMessage"
-    )
-    assert "📎 1 файл" in message.text
-    assert message.reply_markup is not None
+    assert "SendPhoto" not in names
+    assert "SendMediaGroup" not in names
+    assert names == ["EditMessageText"]
 
 
-async def test_open_detail_cleans_up_previous_album(session) -> None:
+async def test_open_detail_does_not_stack_previous_media(session) -> None:
     chat_id = 9003
     user, service, hw = await _seed_homework(session, attachments=2)
     recording = RecordingSession()
@@ -202,20 +160,12 @@ async def test_open_detail_cleans_up_previous_album(session) -> None:
     bot = Bot(token=BOT_TOKEN, session=recording)
 
     await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
-    first_album_ids = {
-        message_id
-        for name, message_id in recording.results
-        if name == "SendMediaGroup"
-    }
-
     await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
 
-    deleted = [
-        call.message_id
+    assert all(
+        type(call).__name__ not in {"SendMediaGroup", "SendPhoto", "SendDocument"}
         for call in recording.calls
-        if type(call).__name__ == "DeleteMessage"
-    ]
-    assert first_album_ids.issubset(deleted)
+    )
 
 
 async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
@@ -272,6 +222,50 @@ async def test_detail_delete_buttons_photos_numbered_and_files_named(session) ->
         "🗑 IMG001.jpg",
         "🗑 задание.pdf",
     ]
+
+
+async def test_folder_open_buttons_use_lazy_file_callback(session) -> None:
+    user, service, hw = await _seed_homework(session, attachments=2)
+    await service.add_attachment(
+        hw,
+        telegram_file_id="DOC1",
+        file_type=AttachmentType.DOCUMENT,
+        author_id=user.id,
+        file_name="задание.pdf",
+    )
+    detail = await service.get_detail(hw)
+    deleteable = {item.id for item in detail.attachments}
+    _, markup = _folder_payload(
+        hw, detail, can_add_files=True, deleteable_attachment_ids=deleteable
+    )
+    attachment_ids = [item.id for item in detail.attachments]
+    open_buttons = [
+        btn
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.callback_data is not None
+        and btn.callback_data.startswith(HW_OPEN_FILE)
+    ]
+    assert [btn.text for btn in open_buttons] == [
+        "👁 IMG000.jpg",
+        "👁 IMG001.jpg",
+        "👁 задание.pdf",
+    ]
+    assert [btn.callback_data for btn in open_buttons] == [
+        f"{HW_OPEN_FILE}{hw.id}:{item_id}" for item_id in attachment_ids
+    ]
+    # открыть можно и неудаляемые вложения (например, чужие файлы)
+    _, markup = _folder_payload(
+        hw, detail, can_add_files=True, deleteable_attachment_ids=set()
+    )
+    open_buttons = [
+        btn
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.callback_data is not None
+        and btn.callback_data.startswith(HW_OPEN_FILE)
+    ]
+    assert len(open_buttons) == len(detail.attachments)
 
 
 async def test_delete_buttons_use_global_photo_numbering(session) -> None:
@@ -401,28 +395,17 @@ async def test_delete_last_file_edits_buttons_message(session) -> None:
     bot = Bot(token=BOT_TOKEN, session=recording)
 
     await _open_detail(_source_message(bot, chat_id), bot, session, user, service, hw)
-    buttons_id = next(
-        message_id
-        for name, message_id in recording.results
-        if name == "SendMessage"
-    )
-    photo_id = next(
-        message_id for name, message_id in recording.results if name == "SendPhoto"
-    )
+    names = recording.names()
+    assert names == ["EditMessageText"]
     attachment_id = (await service.attachments_for(hw))[0].id
     await service.delete_attachment(hw, attachment_id)
 
     await _open_detail(
-        _source_message(bot, chat_id, buttons_id), bot, session, user, service, hw
+        _source_message(bot, chat_id), bot, session, user, service, hw
     )
 
     names = recording.names()
     assert "EditMessageText" in names
-    assert names.count("SendPhoto") == 1
-    deleted = [
-        call.message_id
-        for call in recording.calls
-        if type(call).__name__ == "DeleteMessage"
-    ]
-    assert photo_id in deleted
-    assert buttons_id not in deleted
+    assert names.count("SendPhoto") == 0
+    assert names.count("SendMediaGroup") == 0
+    assert "DeleteMessage" not in names

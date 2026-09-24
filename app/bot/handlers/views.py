@@ -8,9 +8,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaDocument,
-    InputMediaPhoto,
-    MediaUnion,
     Message,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +24,7 @@ from app.bot.callbacks import (
     HW_EDIT,
     HW_EDIT_FIELD,
     HW_FOLDER_BACK,
+    HW_OPEN_FILE,
     HW_OPEN_FOLDER,
     MENU_BACK,
     PAGE,
@@ -41,7 +39,6 @@ from app.bot.formats import (
     clamp_button_text,
     clamp_file_name,
     esc,
-    format_date_russian,
     format_homework_label,
     link_html,
     link_label,
@@ -66,7 +63,7 @@ from app.bot.keyboards.views import (
 from app.bot.messages import NO_GROUP_TEXT
 from app.bot.render import edit_or_resend
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
-from app.database.models import Attachment, AttachmentType, Homework, User
+from app.database.models import AttachmentType, Homework, User
 from app.dates import russian_month_name_short
 from app.services.homework_service import (
     HomeworkDetail,
@@ -86,69 +83,14 @@ EMPTY_LINE = "  — заданий нет"
 
 _DETAIL_HEADER = "🐹 *Homy достаёт нужную карточку из папки*"
 
-_ALBUM_MAX_ITEMS = 10
-
-# (chat_id, homework_id) -> id сообщений карточки (альбом + кнопки)
-_sent_detail_messages: dict[tuple[int, int], list[int]] = {}
-
 # (chat_id, user_id) -> (категория, страница) последнего просмотренного списка
 _list_context: dict[tuple[int, int], tuple[str, int]] = {}
-
-
-def _remember_detail(
-    chat_id: int, homework_id: int, messages: list[Message]
-) -> None:
-    _sent_detail_messages[(chat_id, homework_id)] = [
-        message.message_id for message in messages
-    ]
-
-
-def _forget_detail_ids(chat_id: int, homework_id: int) -> list[int]:
-    if len(_sent_detail_messages) > 200:
-        _sent_detail_messages.clear()
-    return _sent_detail_messages.pop((chat_id, homework_id), [])
-
-
-async def _cleanup_detail_messages(
-    bot: Bot,
-    chat_id: int,
-    homework_id: int,
-    *,
-    exclude: int | None = None,
-) -> None:
-    for message_id in _forget_detail_ids(chat_id, homework_id):
-        if message_id == exclude:
-            continue
-        try:
-            await bot.delete_message(chat_id, message_id)
-        except Exception:
-            pass
 
 
 def _remember_list_context(
     chat_id: int, user_id: int, target: tuple[str, int]
 ) -> None:
     _list_context[(chat_id, user_id)] = target
-
-
-def _compact_caption(homework: Homework, detail: HomeworkDetail) -> str:
-    return (
-        f"📚 {esc(detail.subject)} · {esc(homework.title)} · "
-        f"до {format_date_russian(homework.deadline)}"
-    )
-
-
-def _attachment_send_plan(
-    attachments: list[Attachment],
-) -> list[tuple[str, list[Attachment]]]:
-    """План отправки вложений: ('album' | 'single', файлы одного типа)."""
-    ops: list[tuple[str, list[Attachment]]] = []
-    for attachment_type in (AttachmentType.PHOTO, AttachmentType.DOCUMENT):
-        items = [a for a in attachments if a.file_type == attachment_type]
-        for start in range(0, len(items), _ALBUM_MAX_ITEMS):
-            chunk = items[start : start + _ALBUM_MAX_ITEMS]
-            ops.append(("single" if len(chunk) == 1 else "album", chunk))
-    return ops
 
 
 def _date_ru(day: date) -> str:
@@ -251,7 +193,7 @@ def _folder_payload(
 ) -> tuple[str, InlineKeyboardMarkup]:
     photo_lines: list[str] = []
     file_lines: list[str] = []
-    delete_buttons: list[InlineKeyboardButton] = []
+    attachment_rows: list[list[InlineKeyboardButton]] = []
     photo_index = 0
     for item in detail.attachments:
         if item.file_type == AttachmentType.PHOTO:
@@ -261,13 +203,20 @@ def _folder_payload(
         else:
             label = clamp_file_name(item.file_name or "Файл")
             file_lines.append(_author_suffix(label, item.author_name))
+        row = [
+            InlineKeyboardButton(
+                text=clamp_button_text(f"👁 {label}"),
+                callback_data=f"{HW_OPEN_FILE}{homework.id}:{item.id}",
+            )
+        ]
         if item.id in deleteable_attachment_ids:
-            delete_buttons.append(
+            row.append(
                 InlineKeyboardButton(
                     text=clamp_button_text(f"🗑 {label}"),
                     callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
                 )
             )
+        attachment_rows.append(row)
     link_lines = [
         link_html(link.url, link_label(link.url, link.title), link.author_name)
         for link in detail.links
@@ -287,8 +236,8 @@ def _folder_payload(
                 callback_data=f"{HW_ADD_FILES}{homework.id}",
             )
         )
-    for index in range(0, len(delete_buttons), 2):
-        builder.row(*delete_buttons[index : index + 2])
+    for row in attachment_rows:
+        builder.row(*row)
     builder.row(
         InlineKeyboardButton(
             text="🔙 К заданию",
@@ -338,84 +287,16 @@ async def _open_detail(
         deleteables,
     )
     chat_id = message.chat.id
-    homework_id = homework.id
-    attachments = await service.attachments_for(homework)
-    if not attachments:
-        await _cleanup_detail_messages(
-            bot, chat_id, homework_id, exclude=message.message_id
-        )
-        await edit_or_resend(message, text, markup)
-        return message
-    if delete_source:
-        try:
-            await message.delete()
-        except Exception:
-            pass
-    await _cleanup_detail_messages(bot, chat_id, homework_id)
-    sent: list[Message] = []
-    caption_placed = False
     try:
-        for operation, chunk in _attachment_send_plan(attachments):
-            if operation == "album":
-                media = _album_media(
-                    chunk,
-                    _compact_caption(homework, detail)
-                    if not caption_placed
-                    else None,
-                )
-                if not caption_placed:
-                    caption_placed = True
-                sent.extend(await bot.send_media_group(chat_id, media))
-                continue
-            item = chunk[0]
-            media_caption = (
-                _compact_caption(homework, detail) if not caption_placed else None
-            )
-            if not caption_placed:
-                caption_placed = True
-            if item.file_type == AttachmentType.PHOTO:
-                sent.append(
-                    await bot.send_photo(
-                        chat_id,
-                        item.telegram_file_id,
-                        caption=media_caption,
-                        parse_mode=(
-                            ParseMode.HTML if media_caption is not None else None
-                        ),
-                    )
-                )
-            else:
-                sent.append(
-                    await bot.send_document(
-                        chat_id,
-                        item.telegram_file_id,
-                        caption=media_caption,
-                        parse_mode=(
-                            ParseMode.HTML if media_caption is not None else None
-                        ),
-                    )
-                )
-        sent.append(await bot.send_message(chat_id, text, reply_markup=markup))
-        _remember_detail(chat_id, homework_id, sent)
-        return sent[-1]
+        if delete_source:
+            await edit_or_resend(message, text, markup)
+            return message
+        return await bot.send_message(chat_id, text, reply_markup=markup)
     except Exception:
         try:
-            await bot.send_message(chat_id, text, reply_markup=markup)
+            return await bot.send_message(chat_id, text, reply_markup=markup)
         except Exception:
-            pass
-        for item in attachments:
-            try:
-                if item.file_type == AttachmentType.PHOTO:
-                    await bot.send_photo(chat_id, item.telegram_file_id)
-                else:
-                    await bot.send_document(
-                        chat_id,
-                        item.telegram_file_id,
-                        caption=f"📎 {item.file_name or 'Файл'}",
-                    )
-            except Exception:
-                pass
-        return None
+            return None
 
 
 async def _open_folder_view(
@@ -440,7 +321,7 @@ async def _show_card_text(
     homework: Homework,
     user: User,
 ) -> None:
-    """Возвращает папку к карточке задания (без пересборки альбома)."""
+    """Возвращает папку к карточке задания."""
     detail = await service.get_detail(homework)
     can_modify = await service.can_modify(user, homework.group_id, homework)
     can_add_files = await service.is_member(user, homework.group_id)
@@ -465,41 +346,6 @@ async def _open_folder_after_changes(
     card = await _open_detail(message, bot, session, user, service, homework)
     if card is not None:
         await _open_folder_view(card, service, homework, user)
-
-
-def _album_media(
-    chunk: list[Attachment],
-    caption: str | None,
-) -> list[MediaUnion]:
-    if chunk[0].file_type == AttachmentType.PHOTO:
-        media: list[MediaUnion] = []
-        for index, item in enumerate(chunk):
-            if index == 0 and caption is not None:
-                media.append(
-                    InputMediaPhoto(
-                        media=item.telegram_file_id,
-                        caption=caption,
-                        parse_mode=ParseMode.HTML,
-                    )
-                )
-            else:
-                media.append(InputMediaPhoto(media=item.telegram_file_id))
-        return media
-    documents: list[MediaUnion] = []
-    for index, item in enumerate(chunk):
-        if index == 0 and caption is not None:
-            documents.append(
-                InputMediaDocument(
-                    media=item.telegram_file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                )
-            )
-        else:
-            documents.append(
-                InputMediaDocument(media=item.telegram_file_id)
-            )
-    return documents
 
 
 @router.callback_query(CallbackDataPrefix(CB_NEAREST_DEADLINES))
@@ -749,14 +595,6 @@ async def on_detail_back(
     if not query.data or not isinstance(query.message, Message):
         await query.answer()
         return
-    homework_id = safe_int(query.data[len(DETAIL_BACK):])
-    if homework_id is not None:
-        await _cleanup_detail_messages(
-            bot,
-            query.message.chat.id,
-            homework_id,
-            exclude=query.message.message_id,
-        )
     target = _list_context.pop((query.message.chat.id, user.id), None)
     if target is not None:
         category, page = target
@@ -833,6 +671,57 @@ async def on_folder_back(
         return
     await _show_card_text(query.message, service, homework, user)
     await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(HW_OPEN_FILE))
+async def on_open_file(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    payload = query.data[len(HW_OPEN_FILE):]
+    homework_raw, _, attachment_raw = payload.partition(":")
+    if not homework_raw or not attachment_raw:
+        await query.answer()
+        return
+    try:
+        homework_id, attachment_id = int(homework_raw), int(attachment_raw)
+    except ValueError:
+        await query.answer()
+        return
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
+        await query.answer("Задание не найдено.", show_alert=True)
+        return
+    attachments = await service.attachments_for(homework)
+    attachment = next(
+        (item for item in attachments if item.id == attachment_id), None
+    )
+    if attachment is None:
+        await query.answer("Файл не найден.", show_alert=True)
+        return
+    await query.answer()
+    if attachment.file_type == AttachmentType.PHOTO:
+        await bot.send_photo(
+            query.message.chat.id,
+            attachment.telegram_file_id,
+        )
+    else:
+        await bot.send_document(
+            query.message.chat.id,
+            attachment.telegram_file_id,
+            caption=f"📎 {attachment.file_name or 'Файл'}",
+        )
 
 
 @router.callback_query(CallbackDataPrefix(HW_ADD_FILES))
@@ -1193,25 +1082,7 @@ async def _finish_edit(
     homework: Homework,
     user: User,
 ) -> None:
-    detail = await service.get_detail(homework)
-    can_modify = await service.can_modify(
-        user, homework.group_id, homework
-    )
-    can_add_files = await service.is_member(user, homework.group_id)
-    deleteables = await _deleteable_attachment_ids(
-        service, user, homework, detail
-    )
-    if len(detail.attachments) >= 2:
-        await _open_detail(message, bot, session, user, service, homework)
-        return
-    text, markup = _detail_payload(
-        homework,
-        detail,
-        can_modify,
-        can_add_files,
-        deleteables,
-    )
-    await message.edit_text(text, reply_markup=markup)
+    await _open_detail(message, bot, session, user, service, homework)
 
 
 async def _send_edited_detail(
@@ -1223,23 +1094,15 @@ async def _send_edited_detail(
     homework: Homework,
 ) -> None:
     """Показывает отредактированное дз новым сообщением (источник не удаляя)."""
-    detail = await service.get_detail(homework)
-    if detail.attachments:
-        await _open_detail(
-            message,
-            bot,
-            session,
-            user,
-            service,
-            homework,
-            delete_source=False,
-        )
-        return
-    deleteables = {item.id for item in detail.attachments}
-    text, markup = _detail_payload(
-        homework, detail, True, True, deleteables
+    await _open_detail(
+        message,
+        bot,
+        session,
+        user,
+        service,
+        homework,
+        delete_source=False,
     )
-    await message.answer(text, reply_markup=markup)
 
 
 async def apply_edit_field(
@@ -1396,12 +1259,6 @@ async def on_delete_confirm(
         )
         return
     await service.delete_homework(homework)
-    await _cleanup_detail_messages(
-        bot,
-        query.message.chat.id,
-        homework_id,
-        exclude=query.message.message_id,
-    )
     await edit_or_resend(
         query.message, "✅ Задание удалено. Нажми /menu для возврата."
     )
