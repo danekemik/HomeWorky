@@ -45,6 +45,7 @@ services:
       TIMEZONE: ${TIMEZONE:-Europe/Moscow}
       REMINDER_TIME: ${REMINDER_TIME:-20:00}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TELEGRAM_REQUEST_TIMEOUT: ${TELEGRAM_REQUEST_TIMEOUT:-35}
 
 volumes:
   pgdata:

@@ -13,9 +13,9 @@ from aiogram.methods.base import TelegramType
 
 logger = logging.getLogger(__name__)
 
-_RETRY_ATTEMPTS = 8
+_RETRY_ATTEMPTS = 12
 _RETRY_BASE_DELAY = 0.5
-_RETRY_MAX_DELAY = 20.0
+_RETRY_MAX_DELAY = 30.0
 _RETRY_JITTER = 0.2
 
 _RETRYABLE = (TelegramNetworkError, TelegramServerError)
