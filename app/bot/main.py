@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message, TelegramObject
 
 from app.bot.handlers import group_events, homework, menu, settings, start, statistics, views
 from app.bot.middlewares.db import DatabaseSessionMiddleware
+from app.bot.middlewares.network_retry import RetryOnNetworkError
 from app.bot.middlewares.throttling import ThrottlingMiddleware
 from app.bot.middlewares.user import UserContextMiddleware
 from app.database.session import Database
@@ -20,7 +21,9 @@ HandlerType = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
 
 def create_bot(token: str) -> Bot:
-    return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot.session.middleware.register(RetryOnNetworkError())
+    return bot
 
 
 def create_storage(redis_url: str | None) -> Any:
