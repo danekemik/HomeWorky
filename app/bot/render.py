@@ -23,3 +23,17 @@ async def edit_or_resend(
         await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
         return
     await message.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
+
+
+async def replace_message_at_bottom(
+    message: Message,
+    text: str,
+    markup: InlineKeyboardMarkup | None = None,
+    parse_mode: ParseMode | str | None = None,
+) -> Message:
+    """Ставит меню в конец чата: удаляет старое и шлёт новое сообщение."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    return await message.answer(text, reply_markup=markup, parse_mode=parse_mode)

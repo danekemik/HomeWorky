@@ -468,7 +468,7 @@ def _resolve_group_stub(group):
     return stub
 
 
-async def test_open_file_sends_media_with_folder_menu(monkeypatch, session) -> None:
+async def test_open_file_always_sends_preview_at_bottom(monkeypatch, session) -> None:
     chat_id = 9101
     user, service, hw = await _seed_homework(session, attachments=2)
     group = (await GroupRepository(session).list_groups_for_user(user.id))[0]
@@ -490,6 +490,9 @@ async def test_open_file_sends_media_with_folder_menu(monkeypatch, session) -> N
         user,
         context,
     )
+    first_sent_id = next(
+        (msg_id for name, msg_id in recording.results if name == "SendPhoto"), None
+    )
     await views_handlers.on_open_file(
         _folder_callback(bot, chat_id, f"{HW_OPEN_FILE}{hw.id}:{second.id}"),
         bot,
@@ -498,34 +501,26 @@ async def test_open_file_sends_media_with_folder_menu(monkeypatch, session) -> N
         context,
     )
 
-    media = [
-        call
-        for call in recording.calls
-        if type(call).__name__ in {"SendPhoto", "EditMessageMedia"}
+    sent = [
+        call for call in recording.calls if type(call).__name__ == "SendPhoto"
     ]
-    assert [type(call).__name__ for call in media] == ["SendPhoto", "EditMessageMedia"]
-    sent = media[0]
-    assert sent.photo == first.telegram_file_id
-    assert sent.reply_markup is not None
-    assert "🔙 К заданию" in {
-        btn.text for row in sent.reply_markup.inline_keyboard for btn in row
-    }
-    edited = media[1]
-    sent_id = next(
-        (msg_id for name, msg_id in recording.results if name == "SendPhoto"), None
-    )
-    assert edited.message_id == sent_id
-    assert edited.media.media == second.telegram_file_id
-    assert edited.media.type == "photo"
-    edited_id = next(
+    assert len(sent) == 2
+    assert sent[0].photo == first.telegram_file_id
+    assert sent[1].photo == second.telegram_file_id
+    for item in sent:
+        assert item.reply_markup is not None
+        assert "🔙 К заданию" in {
+            btn.text for row in item.reply_markup.inline_keyboard for btn in row
+        }
+    second_sent_id = next(
         (
             msg_id
             for name, msg_id in recording.results
-            if name == "EditMessageMedia"
+            if name == "SendPhoto" and msg_id != first_sent_id
         ),
         None,
     )
-    assert views_handlers._OPENED_FILE_MESSAGES[(chat_id, hw.id)] == edited_id
+    assert views_handlers._OPENED_FILE_MESSAGES[(chat_id, hw.id)] == second_sent_id
 
 
 async def test_open_file_document_uses_send_document_with_caption(

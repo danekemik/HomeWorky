@@ -8,8 +8,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaDocument,
-    InputMediaPhoto,
     Message,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,7 +61,7 @@ from app.bot.keyboards.views import (
     homeworks_category_keyboard,
 )
 from app.bot.messages import NO_GROUP_TEXT
-from app.bot.render import edit_or_resend
+from app.bot.render import edit_or_resend, replace_message_at_bottom
 from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import AttachmentType, Homework, User
 from app.dates import russian_month_name_short
@@ -356,7 +354,7 @@ async def _open_folder_view(
     homework: Homework,
     user: User,
 ) -> None:
-    """Показывает «папку» файлов, переписывая сообщение-карточку."""
+    """Показывает «папку» файлов в конце чата."""
     await _delete_file_preview(bot, message.chat.id, homework.id)
     detail = await service.get_detail(homework)
     can_add_files = await service.is_member(user, homework.group_id)
@@ -364,7 +362,7 @@ async def _open_folder_view(
         service, user, homework, detail
     )
     text, markup = _folder_payload(homework, detail, can_add_files, deleteables)
-    await edit_or_resend(message, text, markup, parse_mode=ParseMode.HTML)
+    await replace_message_at_bottom(message, text, markup, parse_mode=ParseMode.HTML)
 
 
 async def _show_card_text(
@@ -373,7 +371,7 @@ async def _show_card_text(
     homework: Homework,
     user: User,
 ) -> None:
-    """Возвращает папку к карточке задания."""
+    """Возвращает папку к карточке задания в конец чата."""
     detail = await service.get_detail(homework)
     can_modify = await service.can_modify(user, homework.group_id, homework)
     can_add_files = await service.is_member(user, homework.group_id)
@@ -383,7 +381,7 @@ async def _show_card_text(
     text, markup = _detail_payload(
         homework, detail, can_modify, can_add_files, deleteables
     )
-    await edit_or_resend(message, text, markup)
+    await replace_message_at_bottom(message, text, markup)
 
 
 async def _open_folder_after_changes(
@@ -770,34 +768,7 @@ async def on_open_file(
     )
     markup = _folder_markup(homework, detail, can_add_files, deleteables)
     key = _preview_key(query.message.chat.id, homework_id)
-    current = _OPENED_FILE_MESSAGES.get(key)
-    if current is not None:
-        try:
-            if attachment.file_type == AttachmentType.PHOTO:
-                media: InputMediaPhoto | InputMediaDocument = InputMediaPhoto(
-                    media=attachment.telegram_file_id
-                )
-            else:
-                if attachment.file_name:
-                    media = InputMediaDocument(
-                        media=attachment.telegram_file_id,
-                        caption=f"📎 {attachment.file_name}",
-                    )
-                else:
-                    media = InputMediaDocument(media=attachment.telegram_file_id)
-            edited = await bot.edit_message_media(
-                chat_id=query.message.chat.id,
-                message_id=current,
-                media=media,
-                reply_markup=markup,
-            )
-            if isinstance(edited, Message):
-                _OPENED_FILE_MESSAGES[key] = edited.message_id
-                await query.answer()
-                return
-        except Exception:
-            pass
-    chat_id = query.message.chat.id
+    await _delete_file_preview(bot, query.message.chat.id, homework_id)
     if (
         not query.message.photo
         and not query.message.document
@@ -807,7 +778,7 @@ async def on_open_file(
             await query.message.delete()
         except Exception:
             pass
-    await _delete_file_preview(bot, chat_id, homework_id)
+    chat_id = query.message.chat.id
     if attachment.file_type == AttachmentType.PHOTO:
         sent = await bot.send_photo(
             chat_id,
@@ -876,7 +847,7 @@ async def on_add_files(
     )
     from app.bot.handlers.homework import ATTACH_PENDING
 
-    await edit_or_resend(
+    await replace_message_at_bottom(
         query.message,
         ATTACH_PENDING,
         markup=attachment_keyboard(False),
