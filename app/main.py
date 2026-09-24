@@ -38,19 +38,21 @@ async def main() -> None:
     configure_logging()
     database = Database(settings.DATABASE_URL)
     bot = create_bot(settings.BOT_TOKEN)
-    await _register_commands(bot)
     dispatcher = create_dispatcher(database, redis_url=settings.REDIS_URL)
     reminder_task = asyncio.create_task(
         run_reminder_loop(bot, database, settings)
     )
+    commands_task = asyncio.create_task(_register_commands(bot))
     try:
         await dispatcher.start_polling(bot)
     finally:
+        commands_task.cancel()
         reminder_task.cancel()
-        try:
-            await reminder_task
-        except asyncio.CancelledError:
-            pass
+        for task in (commands_task, reminder_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await database.dispose()
         await bot.session.close()
 
