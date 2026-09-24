@@ -5,7 +5,7 @@ from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
 from app.bot.callbacks import DETAIL_BACK, HW_DELETE_FILE, HW_DELETE_FILE_CONFIRM
-from app.bot.formats import build_homework_card
+from app.bot.formats import build_homework_card, plural_files
 from app.bot.handlers.views import (
     _attachment_send_plan,
     _detail_payload,
@@ -183,7 +183,7 @@ async def test_open_detail_single_file_sends_media_and_buttons(session) -> None:
     message = next(
         call for call in recording.calls if type(call).__name__ == "SendMessage"
     )
-    assert "📎 Файлы" in message.text
+    assert "📎 1 файл" in message.text
     assert message.reply_markup is not None
 
 
@@ -239,7 +239,7 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     assert back.text == "🔙 К списку"
     assert back.callback_data == f"{DETAIL_BACK}{hw.id}"
     assert "🔗" not in text
-    assert "📎 Файлы" in text
+    assert "📎 2 файла" in text
 
 
 async def test_detail_delete_buttons_photos_numbered_and_files_named(session) -> None:
@@ -334,15 +334,59 @@ def test_members_keyboard_delete_button_next_to_each_member() -> None:
     assert rows[1][1].callback_data == "set:rm:5:22"
 
 
-def test_card_files_each_on_own_line() -> None:
+def test_card_format() -> None:
+    text = build_homework_card(
+        header="🐹 Homy достаёт нужную карточку из папки",
+        subject="История",
+        title="Презентация",
+        deadline=date(2026, 9, 24),
+        description="Про племя",
+        author_name="Даня",
+        attachment_count=3,
+    )
+    assert (
+        text
+        == "<b>🐹 Homy достаёт нужную карточку из папки</b>\n"
+        "\n📖 ИСТОРИЯ\n"
+        "\n🎯 Презентация\n"
+        "\n📝 Про племя\n"
+        "\n📅 24 сентября\n"
+        "\n📎 3 файла\n"
+        "\n👤 Добавил: Даня"
+    )
+
+
+def test_card_without_optional_fields() -> None:
     text = build_homework_card(
         subject="Математика",
         title="Задачи",
         deadline=date(2026, 9, 25),
-        attachment_lines=["a.pdf", "b.pdf", "🖼 Фото"],
-        attachment_limit=10,
     )
-    assert "\n\n📎 Файлы (3/10):\n  • a.pdf\n  • b.pdf\n  • 🖼 Фото" in text
+    assert (
+        text
+        == "📖 МАТЕМАТИКА\n"
+        "\n🎯 Задачи\n"
+        "\n📅 25 сентября"
+    )
+
+
+def test_card_links_section() -> None:
+    text = build_homework_card(
+        subject="Физика",
+        title="Лаб",
+        deadline=date(2026, 9, 26),
+        link_lines=["Гайд"],
+    )
+    assert "🔗 Ссылки:\n  • Гайд" in text
+
+
+def test_plural_files() -> None:
+    assert plural_files(1) == "файл"
+    assert plural_files(3) == "файла"
+    assert plural_files(5) == "файлов"
+    assert plural_files(11) == "файлов"
+    assert plural_files(21) == "файл"
+    assert plural_files(24) == "файла"
 
 
 async def test_delete_last_file_edits_buttons_message(session) -> None:

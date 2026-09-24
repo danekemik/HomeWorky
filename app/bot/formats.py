@@ -40,6 +40,18 @@ def format_homework_label(subject: str, title: str, deadline: date) -> str:
     return f"📅 {format_deadline(deadline)} · {subject} — {title}"
 
 
+def plural_files(count: int) -> str:
+    """Склонение: 1 файл, 3 файла, 5 файлов, 21 файл, 24 файла."""
+    if 11 <= count % 100 <= 14:
+        return "файлов"
+    last = count % 10
+    if last == 1:
+        return "файл"
+    if 2 <= last <= 4:
+        return "файла"
+    return "файлов"
+
+
 def build_homework_card(
     *,
     subject: str,
@@ -47,22 +59,21 @@ def build_homework_card(
     deadline: date,
     description: str | None = None,
     author_name: str | None = None,
-    attachment_lines: list[str] | None = None,
-    attachment_limit: int | None = None,
+    attachment_count: int | None = None,
     link_lines: list[str] | None = None,
+    header: str | None = None,
     footer_note: str | None = None,
 ) -> str:
-    lines = [f"📚 {esc(subject)}", "", f"💻 {esc(title)}"]
+    lines: list[str] = []
+    if header:
+        lines += [f"<b>{esc(header)}</b>", ""]
+    lines += [f"📖 {esc(subject.upper())}", "", f"🎯 {esc(title)}"]
     if description:
         lines += ["", f"📝 {esc(description)}"]
-    lines += ["", f"📅 Дедлайн: {format_date_russian(deadline)}"]
-    attachments = attachment_lines or []
-    if attachments:
-        header = "📎 Файлы"
-        if attachment_limit is not None:
-            header = f"{header} ({len(attachments)}/{attachment_limit})"
-        lines += ["", f"{header}:"]
-        lines += [f"  • {esc(line)}" for line in attachments]
+    lines += ["", f"📅 {format_date_russian(deadline)}"]
+    if attachment_count:
+        word = plural_files(attachment_count)
+        lines += ["", f"📎 {attachment_count} {word}"]
     links = link_lines or []
     if links:
         lines += ["", "🔗 Ссылки:"]

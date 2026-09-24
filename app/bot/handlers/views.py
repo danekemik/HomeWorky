@@ -78,6 +78,8 @@ _CATEGORY_TITLES = {
 
 EMPTY_LINE = "  — заданий нет"
 
+_DETAIL_HEADER = "🐹 Homy достаёт нужную карточку из папки"
+
 _ALBUM_MAX_ITEMS = 10
 
 # (chat_id, homework_id) -> id сообщений карточки (альбом + кнопки)
@@ -195,16 +197,13 @@ def _detail_payload(
     deleteable_attachment_ids: set[int],
 ) -> tuple[str, InlineKeyboardMarkup]:
     text = build_homework_card(
+        header=_DETAIL_HEADER,
         subject=detail.subject,
         title=homework.title,
         deadline=homework.deadline,
         description=homework.description,
         author_name=detail.author_name,
-        attachment_lines=[
-            _attachment_line(item)
-            for item in detail.attachments
-        ],
-        attachment_limit=HomeworkService.MAX_ATTACHMENTS,
+        attachment_count=len(detail.attachments) or None,
         link_lines=[link.title or link.url for link in detail.links],
     )
     from aiogram.utils.keyboard import InlineKeyboardBuilder
