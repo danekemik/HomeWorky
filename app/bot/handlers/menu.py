@@ -115,9 +115,14 @@ async def on_pick_group(
         return
     if not await service.has_access(group, user):
         groups = await service.list_groups_for_user(user)
-        await message.edit_text(
-            PICK_GROUP_TEXT, reply_markup=group_picker_keyboard(groups)
-        )
+        if not groups:
+            await message.edit_text(
+                WELCOME_NO_GROUP, reply_markup=onboarding_keyboard()
+            )
+        else:
+            await message.edit_text(
+                PICK_GROUP_TEXT, reply_markup=group_picker_keyboard(groups)
+            )
         await query.answer("Доступ к этой группе запрещён.", show_alert=True)
         return
     select_current_group(user, group.id)

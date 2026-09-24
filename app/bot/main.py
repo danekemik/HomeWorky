@@ -2,7 +2,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
@@ -21,6 +21,14 @@ from app.database.session import Database
 logger = logging.getLogger(__name__)
 
 HandlerType = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
+
+fallback_router = Router(name="fallback")
+
+
+@fallback_router.callback_query()
+async def on_unknown_callback(query: CallbackQuery) -> None:
+    """Глотает callback'и от устаревших/чужих клавиатур — снимает «спиннер»."""
+    await query.answer()
 
 # Безобидные ошибки Telegram при повторных тапах / устаревших сообщениях,
 # которые не стоит показывать пользователю тревожным алертом.
@@ -68,6 +76,7 @@ def create_dispatcher(database: Database, redis_url: str | None = None) -> Dispa
     dispatcher.include_router(settings.router)
     dispatcher.include_router(group_events.router)
     dispatcher.include_router(menu.router)
+    dispatcher.include_router(fallback_router)
     dispatcher.errors.register(global_error_handler)
     return dispatcher
 

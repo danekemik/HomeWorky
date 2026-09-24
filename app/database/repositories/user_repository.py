@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User
@@ -25,7 +26,14 @@ class UserRepository(BaseRepository[User]):
         if user is not None:
             return user
         user = User(telegram_id=telegram_id, **attrs)
-        return await self.add(user)
+        try:
+            return await self.add(user)
+        except IntegrityError:
+            await self._session.rollback()
+            existing = await self.get_by_telegram_id(telegram_id)
+            if existing is not None:
+                return existing
+            raise
 
     async def update_profile(self, user: User, **attrs: object) -> User:
         for key, value in attrs.items():

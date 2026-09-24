@@ -81,6 +81,14 @@ def _page_args(data: str, prefix: str) -> tuple[int, int] | None:
         return None
 
 
+def _clamp_page_offset(offset: int, total: int) -> int:
+    """Не даёт пагинации уйти в отрицательные или несуществующие страницы."""
+    if total <= 0:
+        return 0
+    last = max(0, (total - 1) // PAGE_SIZE_MEMBERS) * PAGE_SIZE_MEMBERS
+    return min(max(offset, 0), last)
+
+
 def _management_text(
     group: Group, invite_code: str, expires_at: datetime, member_count: int
 ) -> str:
@@ -369,6 +377,7 @@ async def render_members(
         await query.answer("Это доступно только старосте группы.", show_alert=True)
         return
     members = await service.list_members(group)
+    offset = _clamp_page_offset(offset, len(members))
     chunk = members[offset : offset + PAGE_SIZE_MEMBERS]
     total_pages = max(1, (len(members) + PAGE_SIZE_MEMBERS - 1) // PAGE_SIZE_MEMBERS)
     labels = [(m.user_id, _user_label(m.user)) for m in chunk]
@@ -501,6 +510,7 @@ async def render_transfer_members(
             show_alert=True,
         )
         return
+    offset = _clamp_page_offset(offset, len(eligible))
     chunk = eligible[offset : offset + PAGE_SIZE_MEMBERS]
     total_pages = max(
         1, (len(eligible) + PAGE_SIZE_MEMBERS - 1) // PAGE_SIZE_MEMBERS

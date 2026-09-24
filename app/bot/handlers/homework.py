@@ -159,11 +159,11 @@ async def render_calendar(query: CallbackQuery, cursor: date) -> None:
 
 
 def _is_base_creation(state: str | None) -> bool:
-    return state is not None and state.startswith(HomeworkCreation.__name__)
+    return state is not None and state.startswith(f"{HomeworkCreation.__name__}:")
 
 
 def _is_base_edit(state: str | None) -> bool:
-    return state is not None and state.startswith(HomeworkEditField.__name__)
+    return state is not None and state.startswith(f"{HomeworkEditField.__name__}:")
 
 
 @router.callback_query(
@@ -1079,7 +1079,7 @@ async def on_flow_cancel(
         await query.answer()
         return
 
-    if state_name.startswith(HomeworkEditField.__name__):
+    if state_name.startswith(f"{HomeworkEditField.__name__}:"):
         data = await state.get_data()
         homework_id = data.get("homework_id")
         if homework_id is None:

@@ -1,6 +1,8 @@
 from datetime import date
+from typing import Any, cast
 
 from sqlalchemy import case, delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -171,35 +173,35 @@ class HomeworkRepository(BaseRepository[Homework]):
     async def delete_for_subject(self, subject_id: int) -> int:
         """Удаляет задания предмета (и их вложения/ссылки); возвращает число ДЗ."""
         ids_stmt = select(Homework.id).where(Homework.subject_id == subject_id)
-        ids = list((await self._session.scalars(ids_stmt)).all())
-        if not ids:
-            return 0
         await self._session.execute(
-            delete(Attachment).where(Attachment.homework_id.in_(ids))
+            delete(Attachment).where(Attachment.homework_id.in_(ids_stmt))
         )
         await self._session.execute(
-            delete(HomeworkLink).where(HomeworkLink.homework_id.in_(ids))
+            delete(HomeworkLink).where(HomeworkLink.homework_id.in_(ids_stmt))
         )
-        await self._session.execute(
-            delete(Homework).where(Homework.id.in_(ids))
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                delete(Homework).where(Homework.id.in_(ids_stmt))
+            ),
         )
-        return len(ids)
+        return result.rowcount or 0
 
     async def delete_expired(self, before: date) -> int:
         ids_stmt = select(Homework.id).where(Homework.deadline < before)
-        ids = list((await self._session.scalars(ids_stmt)).all())
-        if not ids:
-            return 0
         await self._session.execute(
-            delete(Attachment).where(Attachment.homework_id.in_(ids))
+            delete(Attachment).where(Attachment.homework_id.in_(ids_stmt))
         )
         await self._session.execute(
-            delete(HomeworkLink).where(HomeworkLink.homework_id.in_(ids))
+            delete(HomeworkLink).where(HomeworkLink.homework_id.in_(ids_stmt))
         )
-        await self._session.execute(
-            delete(Homework).where(Homework.id.in_(ids))
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                delete(Homework).where(Homework.id.in_(ids_stmt))
+            ),
         )
-        return len(ids)
+        return result.rowcount or 0
 
     async def subject_names_grouped(
         self, group_id: int, homeworks: list[Homework]

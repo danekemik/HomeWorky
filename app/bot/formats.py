@@ -123,6 +123,8 @@ def build_homework_card(
     description: str | None = None,
     author_name: str | None = None,
     attachment_count: int | None = None,
+    photo_count: int = 0,
+    file_count: int = 0,
     link_lines: list[str] | None = None,
     header: str | None = None,
     footer_note: str | None = None,
@@ -135,7 +137,14 @@ def build_homework_card(
     if description:
         lines.append(f"📝 {esc(description)}")
     lines += ["", f"📅 {format_date_russian(deadline)}"]
-    if attachment_count:
+    if photo_count or file_count:
+        parts = []
+        if photo_count:
+            parts.append(f"🖼 {photo_count} фото")
+        if file_count:
+            parts.append(f"📎 {file_count} {plural_files(file_count)}")
+        lines.append(" · ".join(parts))
+    elif attachment_count:
         word = plural_files(attachment_count)
         lines.append(f"📎 {attachment_count} {word}")
     links = link_lines or []

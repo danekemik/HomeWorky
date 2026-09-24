@@ -72,18 +72,24 @@ class GroupService:
         clean = validate_group_name(name)
         if await self._groups.name_exists(clean):
             raise GroupError("Группа с таким названием уже существует.")
-        try:
-            async with self._session.begin_nested():
-                group = await self._groups.create(
-                    name=clean,
-                    created_by=creator.id,
-                    invite_code=await self._unique_code(),
-                    invite_code_expires_at=_new_expiry(),
-                )
-        except IntegrityError as exc:
-            if await self._groups.name_exists(clean):
-                raise GroupError("Группа с таким названием уже существует.") from exc
-            raise
+        for _ in range(3):
+            try:
+                async with self._session.begin_nested():
+                    group = await self._groups.create(
+                        name=clean,
+                        created_by=creator.id,
+                        invite_code=await self._unique_code(),
+                        invite_code_expires_at=_new_expiry(),
+                    )
+                break
+            except IntegrityError as exc:
+                if await self._groups.name_exists(clean):
+                    raise GroupError(
+                        "Группа с таким названием уже существует."
+                    ) from exc
+                # Редкая гонка на инвайт-код — пробуем ещё раз с новым кодом.
+        else:
+            raise GroupError("Не удалось создать группу. Попробуй ещё раз.")
         await self._groups.upsert_membership(
             group.id, creator.id, MemberRole.ADMIN
         )
@@ -124,7 +130,15 @@ class GroupService:
         membership = await self._groups.get_membership(group.id, user.id)
         if membership is not None and membership.role == MemberRole.ADMIN:
             return "Ты уже администратор этой группы."
-        await self._groups.upsert_membership(group.id, user.id, MemberRole.MEMBER)
+        try:
+            await self._groups.upsert_membership(
+                group.id, user.id, MemberRole.MEMBER
+            )
+        except IntegrityError:
+            await self._session.rollback()
+            membership = await self._groups.get_membership(group.id, user.id)
+            if membership is not None and membership.role == MemberRole.ADMIN:
+                return "Ты уже администратор этой группы."
         return None
 
     async def is_admin(self, group: Group, user: User) -> bool:
@@ -214,5 +228,8 @@ class GroupService:
         existing = await self._groups.get_by_telegram_chat_id(chat.id)
         if existing is not None and existing.id != group.id:
             return f"Этот чат уже привязан к группе «{existing.name}»."
-        await self._groups.bind_chat(group, chat.id)
+        try:
+            await self._groups.bind_chat(group, chat.id)
+        except IntegrityError:
+            return "Этот чат уже привязан к другой группе."
         return None

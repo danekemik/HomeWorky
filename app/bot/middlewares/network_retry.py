@@ -20,9 +20,37 @@ _RETRY_JITTER = 0.2
 
 _RETRYABLE = (TelegramNetworkError, TelegramServerError)
 
+# Методы, повтор которых безопасен: безусловно дублируют серверное действие.
+# Шлём-запросы (sendMessage/sendPhoto/...) на сетевой ошибке не повторяем,
+# чтобы не получить дубли после обрыва «в полёте».
+_IDEMPOTENT_METHODS = frozenset(
+    {
+        "AnswerCallbackQuery",
+        "AnswerInlineQuery",
+        "DeleteMessage",
+        "DeleteMessages",
+        "EditMessageCaption",
+        "EditMessageMedia",
+        "EditMessageReplyMarkup",
+        "EditMessageText",
+        "GetChat",
+        "GetChatMember",
+        "GetMe",
+        "SendChatAction",
+    }
+)
+
+
+def _method_name(method: object) -> str:
+    return getattr(type(method), "__name__", "")
+
 
 class RetryOnNetworkError(BaseRequestMiddleware):
-    """Повторяет исходящие запросы к Telegram при сетевых сбоях и 5xx."""
+    """Повторяет исходящие запросы к Telegram при сетевых сбоях и 5xx.
+
+    Сетевые ошибки (таймауты/обрывы) повторяет только для идемпотентных
+    методов; серверные 5xx (ответ гарантированно не применён) — для всех.
+    """
 
     async def __call__(
         self,
@@ -37,6 +65,11 @@ class RetryOnNetworkError(BaseRequestMiddleware):
                 return await make_request(bot, method)
             except _RETRYABLE as exc:
                 if attempt >= _RETRY_ATTEMPTS:
+                    raise
+                retry = isinstance(exc, TelegramServerError) or (
+                    _method_name(method) in _IDEMPOTENT_METHODS
+                )
+                if not retry:
                     raise
                 delay = min(
                     _RETRY_BASE_DELAY * (2 ** (attempt - 1)),

@@ -199,7 +199,8 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     assert folder_back.text == "🔙 К заданию"
     assert folder_back.callback_data == f"{HW_FOLDER_BACK}{hw.id}"
     assert "🔗" not in text
-    assert "📎 2 файла" in text
+    assert "🖼 2 фото" in text
+    assert "📎" not in text
 
 
 async def test_folder_rows_are_name_and_delete(session) -> None:

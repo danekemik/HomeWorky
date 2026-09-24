@@ -31,6 +31,8 @@ def validate_display_name(raw: str) -> str:
         raise UserNameError(
             "Имя должно быть на русском и состоять только из букв."
         )
+    if not any(ch.isalpha() for ch in name):
+        raise UserNameError("Имя должно содержать хотя бы одну букву.")
     return name.title()
 
 

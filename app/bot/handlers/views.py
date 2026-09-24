@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from datetime import date
 
 from aiogram import Bot, Router
@@ -79,20 +80,33 @@ _CATEGORY_TITLES = {
     "mine": "👤 Созданные мной",
 }
 
-_OPENED_FILE_MESSAGES: dict[tuple[int, int], int] = {}
+_OPENED_FILE_MESSAGES: OrderedDict[tuple[int, int], int] = OrderedDict()
+
+_MEMORY_LIMIT = 200
+
+
+def _bounded_set[K, V](
+    store: OrderedDict[K, V], key: K, value: V
+) -> None:
+    """Вставляет запись и не даёт словарю бесконечно расти на долгих сессиях."""
+    store[key] = value
+    store.move_to_end(key)
+    while len(store) > _MEMORY_LIMIT:
+        store.popitem(last=False)
+
 
 EMPTY_LINE = "  — заданий нет"
 
 _DETAIL_HEADER = "🐹 *Homy достаёт нужную карточку из папки*"
 
 # (chat_id, user_id) -> (категория, страница) последнего просмотренного списка
-_list_context: dict[tuple[int, int], tuple[str, int]] = {}
+_list_context: OrderedDict[tuple[int, int], tuple[str, int]] = OrderedDict()
 
 
 def _remember_list_context(
     chat_id: int, user_id: int, target: tuple[str, int]
 ) -> None:
-    _list_context[(chat_id, user_id)] = target
+    _bounded_set(_list_context, (chat_id, user_id), target)
 
 
 def _date_ru(day: date) -> str:
@@ -146,6 +160,12 @@ def _detail_payload(
     can_add_files: bool,
     deleteable_attachment_ids: set[int],
 ) -> tuple[str, InlineKeyboardMarkup]:
+    photos = sum(
+        1
+        for item in detail.attachments
+        if item.file_type == AttachmentType.PHOTO
+    )
+    files = len(detail.attachments) - photos
     text = build_homework_card(
         header=_DETAIL_HEADER,
         subject=detail.subject,
@@ -153,7 +173,8 @@ def _detail_payload(
         deadline=homework.deadline,
         description=homework.description,
         author_name=detail.author_name,
-        attachment_count=len(detail.attachments) or None,
+        photo_count=photos,
+        file_count=files,
         link_lines=[link.title or link.url for link in detail.links],
     )
     from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -511,6 +532,9 @@ async def _render_category_list(
     service = HomeworkService(session)
     today = bot_today()
     total = await _count_homeworks(service, group.id, category, user.id, today)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    if page >= total_pages:
+        page = total_pages - 1
     items = await _list_homeworks(
         service,
         group.id,
@@ -524,7 +548,6 @@ async def _render_category_list(
     rows = [
         (hw.id, _homework_label(hw, subject_names)) for hw in items
     ]
-    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     title = _CATEGORY_TITLES.get(category, "🗂 Все задания")
     text = f"{title}\n\nСтраница {page + 1} из {total_pages} · всего {total}"
     if not rows:
@@ -792,7 +815,7 @@ async def on_open_file(
             caption=f"📎 {attachment.file_name or 'Файл'}",
             reply_markup=markup,
         )
-    _OPENED_FILE_MESSAGES[key] = sent.message_id
+    _bounded_set(_OPENED_FILE_MESSAGES, key, sent.message_id)
     await query.answer()
 
 
@@ -1213,7 +1236,16 @@ async def apply_edit_field(
     if state_name == HomeworkEditField.description.state:
         homework.description = None
     await session.flush()
+    prompt_message_id = data.get("prompt_message_id")
     await state.clear()
+    if (
+        isinstance(prompt_message_id, int)
+        and prompt_message_id != query.message.message_id
+    ):
+        try:
+            await bot.delete_message(query.message.chat.id, prompt_message_id)
+        except Exception:
+            pass
     await _finish_edit(query.message, bot, session, service, homework, user)
     await query.answer()
 

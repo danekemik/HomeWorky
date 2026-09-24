@@ -70,15 +70,16 @@ def build_calendar_markup(
         InlineKeyboardButton(text="›", callback_data=next_cb),
     ]
     days = _available_days(cursor, today)
-    grid = [
-        [
+    grid = []
+    for i in range(0, len(days), 7):
+        row = [
             InlineKeyboardButton(
                 text=str(day.day),
                 callback_data=f"{CALENDAR}day:{day.isoformat()}",
             )
             for day in days[i : i + 7]
         ]
-        for i in range(0, len(days), 7)
-    ]
+        empty = InlineKeyboardButton(text=" ", callback_data=f"{CALENDAR}noop")
+        grid.append(row + [empty] * (7 - len(row)))
     back = [InlineKeyboardButton(text="🔙 Назад", callback_data=FLOW_CANCEL)]
     return InlineKeyboardMarkup(inline_keyboard=[top, *grid, back])

@@ -54,6 +54,8 @@ def attachment_keyboard(has_attachments: bool = False) -> InlineKeyboardMarkup:
         text=("✅ Готово" if has_attachments else "➡️ Пропустить"),
         callback_data=(ATTACH_DONE if has_attachments else ATTACH_SKIP),
     )
+    builder.button(text="🔙 Назад", callback_data=FLOW_CANCEL)
+    builder.adjust(1)
     return builder.as_markup()
 
 
