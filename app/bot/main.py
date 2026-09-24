@@ -4,6 +4,7 @@ from typing import Any
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, ErrorEvent, Message, TelegramObject
@@ -13,6 +14,7 @@ from app.bot.middlewares.db import DatabaseSessionMiddleware
 from app.bot.middlewares.network_retry import RetryOnNetworkError
 from app.bot.middlewares.throttling import ThrottlingMiddleware
 from app.bot.middlewares.user import UserContextMiddleware
+from app.config import settings as bot_settings
 from app.database.session import Database
 
 logger = logging.getLogger(__name__)
@@ -21,7 +23,15 @@ HandlerType = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
 
 
 def create_bot(token: str) -> Bot:
-    bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    session = AiohttpSession(
+        timeout=bot_settings.TELEGRAM_REQUEST_TIMEOUT,
+        proxy=bot_settings.TELEGRAM_PROXY,
+    )
+    bot = Bot(
+        token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
+    )
     bot.session.middleware.register(RetryOnNetworkError())
     return bot
 

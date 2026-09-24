@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     INVITE_CODE_TTL_DAYS: int = 3
     LOG_LEVEL: str = "INFO"
     RATE_LIMIT_MESSAGES_PER_SEC: float = 10.0
+    TELEGRAM_REQUEST_TIMEOUT: float = 20.0
+    TELEGRAM_PROXY: str | None = None
 
     @property
     def tz(self) -> ZoneInfo:
