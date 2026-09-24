@@ -1,0 +1,40 @@
+name: homework-bot
+
+x-app-logging: &app-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  bot:
+    environment:
+      MALLOC_ARENA_MAX: "2"
+    mem_limit: 256m
+    memswap_limit: 384m
+    cpus: 0.25
+    pids_limit: 80
+    init: true
+    logging: *app-logging
+
+  db:
+    mem_limit: 160m
+    memswap_limit: 320m
+    cpus: 0.25
+    pids_limit: 80
+    logging: *app-logging
+
+  redis:
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - noeviction
+    mem_limit: 96m
+    memswap_limit: 160m
+    cpus: 0.10
+    pids_limit: 50
+    logging: *app-logging
