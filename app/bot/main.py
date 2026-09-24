@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, ErrorEvent, Message, TelegramObject
 
@@ -20,6 +21,15 @@ from app.database.session import Database
 logger = logging.getLogger(__name__)
 
 HandlerType = Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]]
+
+# Безобидные ошибки Telegram при повторных тапах / устаревших сообщениях,
+# которые не стоит показывать пользователю тревожным алертом.
+_BENIGN_BAD_REQUESTS = (
+    "message is not modified",
+    "message not found",
+    "there is no text in the message to edit",
+    "message can't be edited",
+)
 
 
 def create_bot(token: str) -> Bot:
@@ -65,6 +75,16 @@ def create_dispatcher(database: Database, redis_url: str | None = None) -> Dispa
 async def global_error_handler(
     event: ErrorEvent, data: dict[str, Any] | None = None
 ) -> None:
+    inner = event.update.event
+    if isinstance(event.exception, TelegramBadRequest):
+        message = (getattr(event.exception, "message", "") or "").lower()
+        if any(token in message for token in _BENIGN_BAD_REQUESTS):
+            if isinstance(inner, CallbackQuery):
+                try:
+                    await inner.answer()
+                except Exception:
+                    pass
+            return
     logger.error(
         "Unhandled update error",
         exc_info=(
@@ -73,7 +93,6 @@ async def global_error_handler(
             event.exception.__traceback__,
         ),
     )
-    inner = event.update.event
     state = (data or {}).get("state")
     if state is not None:
         try:

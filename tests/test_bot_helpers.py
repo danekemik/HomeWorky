@@ -46,6 +46,46 @@ def test_collect_attachment_photo_uses_largest() -> None:
     assert item["file_type"] == AttachmentType.PHOTO.value
 
 
+def _link_message(text: str, *, url: str | None = None) -> Message:
+    base: dict[str, object] = {
+        "message_id": 1,
+        "date": date(2026, 9, 20),
+        "chat": {"id": 1, "type": "private"},
+        "from_user": User(id=1, is_bot=False, first_name="Test"),
+        "text": text,
+        "entities": [
+            {
+                "type": "text_link" if url else "url",
+                "offset": 0,
+                "length": len(text),
+                **({"url": url} if url else {}),
+            }
+        ],
+    }
+    return Message.model_validate(base)
+
+
+def test_extract_link_with_scheme_preserved() -> None:
+    from app.bot.handlers.homework import _extract_link
+
+    message = _link_message("https://example.com/file")
+    assert _extract_link(message) == "https://example.com/file"
+
+
+def test_extract_link_bare_url_gets_https_scheme() -> None:
+    from app.bot.handlers.homework import _extract_link
+
+    message = _link_message("example.com/file")
+    assert _extract_link(message) == "https://example.com/file"
+
+
+def test_extract_link_text_link_without_scheme_normalized() -> None:
+    from app.bot.handlers.homework import _extract_link
+
+    message = _link_message("клик", url="t.me/example")
+    assert _extract_link(message) == "https://t.me/example"
+
+
 def test_calendar_day_callback_format() -> None:
     markup = build_calendar_markup(
         date(2026, 9, 20), today=date(2026, 9, 18)

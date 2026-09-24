@@ -65,6 +65,8 @@ async def cmd_start_group(message: Message) -> None:
     await message.answer(GROUP_HELP)
 
 
-@router.message(Command("help"))
+@router.message(
+    Command("help"), ChatTypeFilter(ChatType.PRIVATE)
+)
 async def cmd_help(message: Message) -> None:
     await message.answer(HELP_TEXT)

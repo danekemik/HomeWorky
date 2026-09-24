@@ -122,8 +122,11 @@ async def render_subject_picker(
 
 
 def _pending_preview_card(data: dict) -> str:
+    deadline_raw = data.get("deadline")
+    if not deadline_raw:
+        return "🐹 *Homy ещё не готов к заполнению*\n\nНачни заново: /menu"
     subject = str(data.get("subject_name") or data.get("subject_id") or "—").upper()
-    deadline = date.fromisoformat(str(data["deadline"]))
+    deadline = date.fromisoformat(str(deadline_raw))
     lines = [
         "🐹 *Homy раскладывает бумаги на столе*",
         "",
@@ -229,7 +232,13 @@ async def on_subject_pick(
         if not await service.can_modify(user, group.id, homework):
             await query.answer("Только автор или модератор может менять.", show_alert=True)
             return
-        await service.set_subject(homework, subject_id)
+        try:
+            await service.set_subject(homework, subject_id)
+        except HomeworkExistsError:
+            await query.answer(
+                "На этот предмет и дату уже есть задание!", show_alert=True
+            )
+            return
         from app.bot.handlers.views import _finish_edit
 
         await state.clear()
@@ -314,7 +323,13 @@ async def on_new_subject(
             await state.clear()
             await message.answer("Доступ запрещён или задание не найдено.")
             return
-        await service.set_subject(homework, subject_id)
+        try:
+            await service.set_subject(homework, subject_id)
+        except HomeworkExistsError:
+            await message.answer(
+                "На этот предмет и дату уже есть задание!"
+            )
+            return
         await state.clear()
         from app.bot.handlers.views import _send_edited_detail
 
@@ -428,6 +443,14 @@ async def on_calendar(
                 "Только автор или модератор может менять.", show_alert=True
             )
             return
+        existing = await service.find_by_subject_and_date(
+            group.id, homework.subject_id, chosen
+        )
+        if existing is not None and existing.id != homework.id:
+            await query.answer(
+                "На этот предмет и дату уже есть задание!", show_alert=True
+            )
+            return
         homework.deadline = chosen
         await session.flush()
         await state.clear()
@@ -511,18 +534,22 @@ def _collect_attachment(message: Message) -> dict[str, object] | None:
     return None
 
 
+def _with_scheme(url: str) -> str:
+    return url if "://" in url else f"https://{url}"
+
+
 def _extract_link(message: Message) -> str | None:
-    """Возвращает первый URL из текста сообщения (по entity или по regex-хвосту)."""
+    """Возвращает первый URL из текста сообщения (по entity, с нормализацией схемы)."""
     if not message.entities:
         return None
     for entity in message.entities:
+        if entity.type == MessageEntityType.TEXT_LINK and entity.url:
+            return _with_scheme(entity.url)
         if entity.type == MessageEntityType.URL:
             start, end = entity.offset, entity.offset + entity.length
             url = (message.text or "")[start:end].strip()
-            if url and "://" in url:
-                return url
-        if entity.type == MessageEntityType.TEXT_LINK and entity.url:
-            return entity.url
+            if url:
+                return _with_scheme(url)
     return None
 
 
@@ -852,6 +879,18 @@ async def on_attachments_done(
             query=query, bot=bot, session=session, user=user, state=state
         )
         return
+    data = await state.get_data()
+    if not (data.get("deadline") and data.get("title") and data.get("subject_id")):
+        await state.clear()
+        from app.bot.handlers.menu import build_menu_payload
+
+        text, markup = await build_menu_payload(
+            session=session, user=user, state=state
+        )
+        if isinstance(query.message, Message):
+            await query.message.edit_text(text, reply_markup=markup)
+        await query.answer()
+        return
     await _show_preview(query, state)
 
 
@@ -937,9 +976,11 @@ async def on_flow_cancel(
         return
 
     if state_name == GroupFlow.join_code.state:
+        await state.clear()
         from app.bot.handlers.menu import render_join_picker
 
         await render_join_picker(query, session, user)
+        await query.answer()
         return
     if state_name == GroupFlow.join_name.state:
         await _back_to_menu(message, bot, session, user, state)
@@ -1065,6 +1106,9 @@ async def on_flow_cancel(
                 await query.answer()
                 return
         await state.set_state(HomeworkEditField.field)
+        data.pop("attachments", None)
+        data.pop("links", None)
+        await state.update_data(**data)
         await message.edit_text(
             "✏️ Что изменить?",
             reply_markup=homework_edit_field_keyboard(int(homework_id)),

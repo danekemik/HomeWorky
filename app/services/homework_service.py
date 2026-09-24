@@ -156,6 +156,12 @@ class HomeworkService:
         subject = await self._subjects.get(subject_id)
         if subject is None or subject.group_id != homework.group_id:
             raise HomeworkAccessError("Предмет не найден в этой группе")
+        if homework.subject_id != subject_id:
+            exists = await self.find_by_subject_and_date(
+                homework.group_id, subject_id, homework.deadline
+            )
+            if exists is not None and exists.id != homework.id:
+                raise HomeworkExistsError
         homework.subject_id = subject_id
         await self._session.flush()
         return homework
@@ -416,23 +422,25 @@ class HomeworkService:
         links: list[dict[str, object]],
         author_id: int | None = None,
     ) -> None:
-        for item in attachments:
-            file_name = item.get("file_name")
-            await self.add_attachment(
-                homework,
-                telegram_file_id=str(item["telegram_file_id"]),
-                file_type=AttachmentType(str(item["file_type"])),
-                file_name=str(file_name) if file_name else None,
-                author_id=author_id,
-            )
-        for item in links:
-            title = item.get("title")
-            await self.add_link(
-                homework,
-                url=str(item["url"]),
-                title=str(title) if title else None,
-                author_id=author_id,
-            )
+        """Сохраняет отложенные вложения атомарно: при лимите ничего не остаётся."""
+        async with self._session.begin_nested():
+            for item in attachments:
+                file_name = item.get("file_name")
+                await self.add_attachment(
+                    homework,
+                    telegram_file_id=str(item["telegram_file_id"]),
+                    file_type=AttachmentType(str(item["file_type"])),
+                    file_name=str(file_name) if file_name else None,
+                    author_id=author_id,
+                )
+            for item in links:
+                title = item.get("title")
+                await self.add_link(
+                    homework,
+                    url=str(item["url"]),
+                    title=str(title) if title else None,
+                    author_id=author_id,
+                )
 
     async def stats(self, group_id: int, user_id: int, today: date) -> dict[str, int]:
         return await self._repo.stats(

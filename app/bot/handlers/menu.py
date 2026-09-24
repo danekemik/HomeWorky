@@ -211,7 +211,9 @@ async def on_join_start(
     query: CallbackQuery,
     session: AsyncSession,
     user: User,
+    state: FSMContext,
 ) -> None:
+    await state.clear()
     await render_join_picker(query, session, user)
 
 

@@ -436,3 +436,33 @@ async def test_replace_message_at_bottom_leaves_parse_mode_to_bot_default() -> N
     sent = [m for m in bot.session.methods if type(m).__name__ == "SendMessage"]
     assert result.message_id == 10
     assert any(isinstance(m.parse_mode, Default) for m in sent)
+
+
+async def test_flow_cancel_join_code_clears_state(bot, session, flow):
+    group, user, _subject, context = flow
+    await context.set_state(GroupFlow.join_code.state)
+    await context.update_data(join_group_id=group.id)
+    await homework_handlers.on_flow_cancel(
+        query=_callback(bot, "flow:cancel"),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    assert await context.get_state() is None
+    texts = bot.session.texts()
+    assert any("Выбери группу" in text for text in texts)
+
+
+async def test_dead_attachments_done_button_returns_menu(bot, session, flow):
+    _group, user, _subject, context = flow
+    await homework_handlers.on_attachments_done(
+        query=_callback(bot, "att:done"),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    assert await context.get_state() is None
+    texts = bot.session.texts()
+    assert any("Выбирай, чем займёмся" in text for text in texts)

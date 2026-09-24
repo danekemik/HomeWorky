@@ -23,27 +23,35 @@ async def run_reminder_loop(bot: Bot, database: Database, cfg: Settings) -> None
     last_cleanup: date | None = None
     last_sent: dict[int, date] = {}
     while True:
-        now = datetime.now(cfg.tz)
-        if last_cleanup != now.date():
-            await _try_cleanup(database, now.date())
-            last_cleanup = now.date()
+        try:
+            now = datetime.now(cfg.tz)
+            if last_cleanup != now.date():
+                await _try_cleanup(database, now.date())
+                last_cleanup = now.date()
 
-        groups = await _bound_groups(database)
-        if groups:
-            target = min(
-                _next_datetime(now, group.reminder_time or cfg.reminder_time)
-                for group in groups
+            groups = await _bound_groups(database)
+            if groups:
+                target = min(
+                    _next_datetime(now, group.reminder_time or cfg.reminder_time)
+                    for group in groups
+                )
+            else:
+                target = _next_datetime(now, cfg.reminder_time)
+            await _sleep_until(target, cfg.tz)
+
+            now = datetime.now(cfg.tz)
+            if last_cleanup != now.date():
+                await _try_cleanup(database, now.date())
+                last_cleanup = now.date()
+            groups = await _bound_groups(database)
+            await _try_send(bot, database, now, groups, cfg, last_sent)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Ошибка в цикле напоминаний; продолжим через 60 секунд"
             )
-        else:
-            target = _next_datetime(now, cfg.reminder_time)
-        await _sleep_until(target, cfg.tz)
-
-        now = datetime.now(cfg.tz)
-        if last_cleanup != now.date():
-            await _try_cleanup(database, now.date())
-            last_cleanup = now.date()
-        groups = await _bound_groups(database)
-        await _try_send(bot, database, now, groups, cfg, last_sent)
+            await asyncio.sleep(60)
 
 
 async def _try_cleanup(database: Database, today: date) -> None:
@@ -115,11 +123,11 @@ async def _send_tomorrow_digests(
                 continue
             if last_sent.get(group.id) == now.date():
                 continue
-            items = await service.collect_digest(group.id, target)
-            text = service.build_digest_text(target, items)
-            if not text or group.telegram_chat_id is None:
-                continue
             try:
+                items = await service.collect_digest(group.id, target)
+                text = service.build_digest_text(target, items)
+                if not text or group.telegram_chat_id is None:
+                    continue
                 await bot.send_message(group.telegram_chat_id, text)
                 last_sent[group.id] = now.date()
                 await asyncio.sleep(0.05)
@@ -128,6 +136,11 @@ async def _send_tomorrow_digests(
                     "Не удалось отправить напоминание группе %s: %s",
                     group.id,
                     exc,
+                )
+            except Exception:
+                logger.exception(
+                    "Ошибка при формировании напоминания для группы %s",
+                    group.id,
                 )
 
 

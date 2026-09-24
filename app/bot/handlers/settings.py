@@ -109,7 +109,9 @@ async def on_settings(
     query: CallbackQuery,
     session: AsyncSession,
     user: User,
+    state: FSMContext,
 ) -> None:
+    await state.clear()
     message = query.message
     if not isinstance(message, Message):
         await query.answer()
@@ -406,6 +408,11 @@ async def on_member_remove(
     if not await service.is_admin(group, user):
         await query.answer("Это доступно только старосте группы.", show_alert=True)
         return
+    if target_user_id == user.id:
+        await query.answer(
+            "Нельзя удалить самого себя из группы.", show_alert=True
+        )
+        return
     target_label = next(
         (
             _user_label(m.user)
@@ -446,6 +453,11 @@ async def on_member_remove_confirm(
         return
     if not await service.is_admin(group, user):
         await query.answer("Это доступно только старосте группы.", show_alert=True)
+        return
+    if target_user_id == user.id:
+        await query.answer(
+            "Нельзя удалить самого себя из группы.", show_alert=True
+        )
         return
     try:
         await service.remove_member(group, target_user_id)

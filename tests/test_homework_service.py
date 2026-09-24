@@ -123,6 +123,41 @@ async def test_edit_fields_and_set_subject(session) -> None:
     assert hw.subject_id == subject_2.id
 
 
+async def test_set_subject_rejects_conflicting_subject_date(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    deadline = date(2026, 9, 25)
+    subject_2 = await SubjectRepository(session).create(group.id, "Физика")
+    service = HomeworkService(session)
+    await _make_hw(session, group, subject, owner, deadline)
+    hw_2 = await _make_hw(session, group, subject_2, owner, deadline)
+    with pytest.raises(HomeworkExistsError):
+        await service.set_subject(hw_2, subject.id)
+    assert hw_2.subject_id == subject_2.id
+
+
+async def test_attach_pending_is_atomic_on_limit(session) -> None:
+    group, owner, _other, _admin, subject = await _seed(session)
+    hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
+    service = HomeworkService(session)
+    for i in range(HomeworkService.MAX_LINKS):
+        await service.add_link(hw, url=f"https://example.com/{i}")
+    with pytest.raises(HomeworkLimitError):
+        await service.attach_pending(
+            hw,
+            attachments=[
+                {
+                    "telegram_file_id": "BBB222",
+                    "file_type": AttachmentType.DOCUMENT.value,
+                    "file_name": "Файл.pdf",
+                }
+            ],
+            links=[{"url": "https://overflow.example.com", "title": None}],
+            author_id=owner.id,
+        )
+    assert await service.attachment_count(hw) == 0
+    assert await service.link_count(hw) == HomeworkService.MAX_LINKS
+
+
 async def test_stats(session) -> None:
     group, owner, other, _admin, subject = await _seed(session)
     today = date(2026, 9, 19)
