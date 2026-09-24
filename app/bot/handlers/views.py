@@ -8,6 +8,8 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaDocument,
+    InputMediaPhoto,
     Message,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,6 +80,8 @@ _CATEGORY_TITLES = {
     "active": "🔥 Актуальные задания",
     "mine": "👤 Созданные мной",
 }
+
+_OPENED_FILE_MESSAGES: dict[tuple[int, int], int] = {}
 
 EMPTY_LINE = "  — заданий нет"
 
@@ -185,47 +189,45 @@ def _author_suffix(name: str, author: str | None) -> str:
     return f"{name} — {author}" if author else name
 
 
-def _folder_payload(
+def _attachment_menu_rows(
     homework: Homework,
     detail: HomeworkDetail,
-    can_add_files: bool,
     deleteable_attachment_ids: set[int],
-) -> tuple[str, InlineKeyboardMarkup]:
-    photo_lines: list[str] = []
-    file_lines: list[str] = []
-    attachment_rows: list[list[InlineKeyboardButton]] = []
+) -> list[list[InlineKeyboardButton]]:
+    """Ряды меню папки: [название] [👁] [🗑] по одной вложению в ряд."""
+    rows: list[list[InlineKeyboardButton]] = []
     photo_index = 0
     for item in detail.attachments:
         if item.file_type == AttachmentType.PHOTO:
             label = photo_label(photo_index)
             photo_index += 1
-            photo_lines.append(_author_suffix(label, item.author_name))
         else:
             label = clamp_file_name(item.file_name or "Файл")
-            file_lines.append(_author_suffix(label, item.author_name))
+        open_data = f"{HW_OPEN_FILE}{homework.id}:{item.id}"
         row = [
             InlineKeyboardButton(
-                text=clamp_button_text(f"👁 {label}"),
-                callback_data=f"{HW_OPEN_FILE}{homework.id}:{item.id}",
-            )
+                text=clamp_button_text(label, limit=20),
+                callback_data=open_data,
+            ),
+            InlineKeyboardButton(text="👁", callback_data=open_data),
         ]
         if item.id in deleteable_attachment_ids:
             row.append(
                 InlineKeyboardButton(
-                    text=clamp_button_text(f"🗑 {label}"),
+                    text="🗑",
                     callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
                 )
             )
-        attachment_rows.append(row)
-    link_lines = [
-        link_html(link.url, link_label(link.url, link.title), link.author_name)
-        for link in detail.links
-    ]
-    text = build_folder_card(
-        photo_lines=photo_lines,
-        file_lines=file_lines,
-        link_lines=link_lines,
-    )
+        rows.append(row)
+    return rows
+
+
+def _folder_markup(
+    homework: Homework,
+    detail: HomeworkDetail,
+    can_add_files: bool,
+    deleteable_attachment_ids: set[int],
+) -> InlineKeyboardMarkup:
     from aiogram.utils.keyboard import InlineKeyboardBuilder
 
     builder = InlineKeyboardBuilder()
@@ -236,7 +238,7 @@ def _folder_payload(
                 callback_data=f"{HW_ADD_FILES}{homework.id}",
             )
         )
-    for row in attachment_rows:
+    for row in _attachment_menu_rows(homework, detail, deleteable_attachment_ids):
         builder.row(*row)
     builder.row(
         InlineKeyboardButton(
@@ -244,7 +246,57 @@ def _folder_payload(
             callback_data=f"{HW_FOLDER_BACK}{homework.id}",
         )
     )
-    return text, builder.as_markup()
+    return builder.as_markup()
+
+
+def _folder_payload(
+    homework: Homework,
+    detail: HomeworkDetail,
+    can_add_files: bool,
+    deleteable_attachment_ids: set[int],
+) -> tuple[str, InlineKeyboardMarkup]:
+    photo_lines: list[str] = []
+    file_lines: list[str] = []
+    photo_index = 0
+    for item in detail.attachments:
+        if item.file_type == AttachmentType.PHOTO:
+            label = photo_label(photo_index)
+            photo_index += 1
+            photo_lines.append(_author_suffix(label, item.author_name))
+        else:
+            label = clamp_file_name(item.file_name or "Файл")
+            file_lines.append(_author_suffix(label, item.author_name))
+    link_lines = [
+        link_html(link.url, link_label(link.url, link.title), link.author_name)
+        for link in detail.links
+    ]
+    text = build_folder_card(
+        photo_lines=photo_lines,
+        file_lines=file_lines,
+        link_lines=link_lines,
+    )
+    return text, _folder_markup(
+        homework,
+        detail,
+        can_add_files,
+        deleteable_attachment_ids,
+    )
+
+
+def _preview_key(chat_id: int, homework_id: int) -> tuple[int, int]:
+    return (chat_id, homework_id)
+
+
+async def _delete_file_preview(bot: Bot, chat_id: int, homework_id: int) -> None:
+    """Удаляет сообщение-превью файла (если оно есть), показываемое в папке."""
+    key = _preview_key(chat_id, homework_id)
+    message_id = _OPENED_FILE_MESSAGES.pop(key, None)
+    if message_id is None:
+        return
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
 
 
 async def _deleteable_attachment_ids(
@@ -301,11 +353,13 @@ async def _open_detail(
 
 async def _open_folder_view(
     message: Message,
+    bot: Bot,
     service: HomeworkService,
     homework: Homework,
     user: User,
 ) -> None:
     """Показывает «папку» файлов, переписывая сообщение-карточку."""
+    await _delete_file_preview(bot, message.chat.id, homework.id)
     detail = await service.get_detail(homework)
     can_add_files = await service.is_member(user, homework.group_id)
     deleteables = await _deleteable_attachment_ids(
@@ -345,7 +399,7 @@ async def _open_folder_after_changes(
     """После добавления/удаления вложений пересобирает вид и остаётся в папке."""
     card = await _open_detail(message, bot, session, user, service, homework)
     if card is not None:
-        await _open_folder_view(card, service, homework, user)
+        await _open_folder_view(card, bot, service, homework, user)
 
 
 @router.callback_query(CallbackDataPrefix(CB_NEAREST_DEADLINES))
@@ -641,7 +695,7 @@ async def on_open_folder(
     if homework is None:
         await query.answer("Задание не найдено.", show_alert=True)
         return
-    await _open_folder_view(query.message, service, homework, user)
+    await _open_folder_view(query.message, bot, service, homework, user)
     await query.answer()
 
 
@@ -669,6 +723,7 @@ async def on_folder_back(
     if homework is None:
         await query.answer("Задание не найдено.", show_alert=True)
         return
+    await _delete_file_preview(bot, query.message.chat.id, homework_id)
     await _show_card_text(query.message, service, homework, user)
     await query.answer()
 
@@ -710,18 +765,56 @@ async def on_open_file(
     if attachment is None:
         await query.answer("Файл не найден.", show_alert=True)
         return
-    await query.answer()
+    detail = await service.get_detail(homework)
+    can_add_files = await service.is_member(user, homework.group_id)
+    deleteables = await _deleteable_attachment_ids(
+        service, user, homework, detail
+    )
+    markup = _folder_markup(homework, detail, can_add_files, deleteables)
+    key = _preview_key(query.message.chat.id, homework_id)
+    current = _OPENED_FILE_MESSAGES.get(key)
+    if current is not None:
+        try:
+            if attachment.file_type == AttachmentType.PHOTO:
+                media: InputMediaPhoto | InputMediaDocument = InputMediaPhoto(
+                    media=attachment.telegram_file_id
+                )
+            else:
+                if attachment.file_name:
+                    media = InputMediaDocument(
+                        media=attachment.telegram_file_id,
+                        caption=f"📎 {attachment.file_name}",
+                    )
+                else:
+                    media = InputMediaDocument(media=attachment.telegram_file_id)
+            edited = await bot.edit_message_media(
+                chat_id=query.message.chat.id,
+                message_id=current,
+                media=media,
+                reply_markup=markup,
+            )
+            if isinstance(edited, Message):
+                _OPENED_FILE_MESSAGES[key] = edited.message_id
+                await query.answer()
+                return
+        except Exception:
+            pass
+    chat_id = query.message.chat.id
     if attachment.file_type == AttachmentType.PHOTO:
-        await bot.send_photo(
-            query.message.chat.id,
+        sent = await bot.send_photo(
+            chat_id,
             attachment.telegram_file_id,
+            reply_markup=markup,
         )
     else:
-        await bot.send_document(
-            query.message.chat.id,
+        sent = await bot.send_document(
+            chat_id,
             attachment.telegram_file_id,
             caption=f"📎 {attachment.file_name or 'Файл'}",
+            reply_markup=markup,
         )
+    _OPENED_FILE_MESSAGES[key] = sent.message_id
+    await query.answer()
 
 
 @router.callback_query(CallbackDataPrefix(HW_ADD_FILES))
@@ -765,6 +858,7 @@ async def on_add_files(
         return
     await state.set_state(HomeworkEditField.attachment)
     select_current_group(user, group.id)
+    await _delete_file_preview(bot, query.message.chat.id, homework_id)
     await state.update_data(
         add_only=True,
         homework_id=homework_id,

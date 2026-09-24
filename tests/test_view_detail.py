@@ -3,6 +3,10 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import CallbackQuery
 from app.bot.callbacks import (
     DETAIL_BACK,
     HW_DELETE_FILE,
@@ -12,6 +16,7 @@ from app.bot.callbacks import (
     HW_OPEN_FOLDER,
 )
 from app.bot.formats import build_homework_card, plural_files
+from app.bot.handlers import views as views_handlers
 from app.bot.handlers.views import (
     _detail_payload,
     _folder_payload,
@@ -19,6 +24,7 @@ from app.bot.handlers.views import (
 )
 from app.bot.keyboards.views import attachment_delete_confirm_keyboard
 from app.database.models import AttachmentType
+from app.database.repositories.group_repository import GroupRepository
 from app.database.repositories.homework_repository import HomeworkRepository
 from app.database.repositories.subject_repository import SubjectRepository
 from app.database.repositories.user_repository import UserRepository
@@ -196,7 +202,7 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     assert "📎 2 файла" in text
 
 
-async def test_detail_delete_buttons_photos_numbered_and_files_named(session) -> None:
+async def test_folder_rows_are_name_view_delete(session) -> None:
     user, service, hw = await _seed_homework(session, attachments=2)
     await service.add_attachment(
         hw,
@@ -210,17 +216,22 @@ async def test_detail_delete_buttons_photos_numbered_and_files_named(session) ->
     _, markup = _folder_payload(
         hw, detail, can_add_files=True, deleteable_attachment_ids=deleteable
     )
-    buttons = [
-        btn
+    rows = [
+        row
         for row in markup.inline_keyboard
-        for btn in row
-        if btn.callback_data is not None
-        and btn.callback_data.startswith(HW_DELETE_FILE)
+        if any(
+            btn.callback_data is not None
+            and (
+                btn.callback_data.startswith(HW_OPEN_FILE)
+                or btn.callback_data.startswith(HW_DELETE_FILE)
+            )
+            for btn in row
+        )
     ]
-    assert [btn.text for btn in buttons] == [
-        "🗑 IMG000.jpg",
-        "🗑 IMG001.jpg",
-        "🗑 задание.pdf",
+    assert [[btn.text for btn in row] for row in rows] == [
+        ["IMG000.jpg", "👁", "🗑"],
+        ["IMG001.jpg", "👁", "🗑"],
+        ["задание.pdf", "👁", "🗑"],
     ]
 
 
@@ -247,25 +258,36 @@ async def test_folder_open_buttons_use_lazy_file_callback(session) -> None:
         and btn.callback_data.startswith(HW_OPEN_FILE)
     ]
     assert [btn.text for btn in open_buttons] == [
-        "👁 IMG000.jpg",
-        "👁 IMG001.jpg",
-        "👁 задание.pdf",
+        "IMG000.jpg",
+        "👁",
+        "IMG001.jpg",
+        "👁",
+        "задание.pdf",
+        "👁",
     ]
-    assert [btn.callback_data for btn in open_buttons] == [
-        f"{HW_OPEN_FILE}{hw.id}:{item_id}" for item_id in attachment_ids
-    ]
+    assert [btn.callback_data for btn in open_buttons] == [*[
+        f"{HW_OPEN_FILE}{hw.id}:{item_id}"
+        for item_id in attachment_ids
+        for _ in range(2)
+    ]]
     # открыть можно и неудаляемые вложения (например, чужие файлы)
     _, markup = _folder_payload(
         hw, detail, can_add_files=True, deleteable_attachment_ids=set()
     )
-    open_buttons = [
-        btn
+    rows = [
+        [btn.text for btn in row]
         for row in markup.inline_keyboard
-        for btn in row
-        if btn.callback_data is not None
-        and btn.callback_data.startswith(HW_OPEN_FILE)
+        if any(
+            btn.callback_data is not None
+            and btn.callback_data.startswith(HW_OPEN_FILE)
+            for btn in row
+        )
     ]
-    assert len(open_buttons) == len(detail.attachments)
+    assert rows == [
+        ["IMG000.jpg", "👁"],
+        ["IMG001.jpg", "👁"],
+        ["задание.pdf", "👁"],
+    ]
 
 
 async def test_delete_buttons_use_global_photo_numbering(session) -> None:
@@ -291,19 +313,28 @@ async def test_delete_buttons_use_global_photo_numbering(session) -> None:
     doc = next(
         item for item in detail.attachments if item.file_type == AttachmentType.DOCUMENT
     )
-    # первое фото не подлежит удалению — кнопки нет, но нумерация глобальная
+    # первое фото не подлежит удалению — в его ряду нет кнопки, но нумерация глобальная
     deleteable = {photos[1].id, doc.id}
     _, markup = _folder_payload(
         hw, detail, can_add_files=True, deleteable_attachment_ids=deleteable
     )
-    labels = [
-        btn.text
+    rows = [
+        [btn.text for btn in row]
         for row in markup.inline_keyboard
-        for btn in row
-        if btn.callback_data is not None
-        and btn.callback_data.startswith(HW_DELETE_FILE)
+        if any(
+            btn.callback_data is not None
+            and (
+                btn.callback_data.startswith(HW_OPEN_FILE)
+                or btn.callback_data.startswith(HW_DELETE_FILE)
+            )
+            for btn in row
+        )
     ]
-    assert labels == ["🗑 тезисы.pdf", "🗑 IMG001.jpg"]
+    assert rows == [
+        ["IMG000.jpg", "👁"],
+        ["тезисы.pdf", "👁", "🗑"],
+        ["IMG001.jpg", "👁", "🗑"],
+    ]
 
 
 def test_attachment_delete_confirm_keyboard() -> None:
@@ -409,3 +440,169 @@ async def test_delete_last_file_edits_buttons_message(session) -> None:
     assert names.count("SendPhoto") == 0
     assert names.count("SendMediaGroup") == 0
     assert "DeleteMessage" not in names
+
+
+def _folder_callback(bot: Bot, chat_id: int, data: str) -> CallbackQuery:
+    query = CallbackQuery.model_validate(
+        {
+            "id": "1",
+            "from_user": {"id": 333, "is_bot": False, "first_name": "Аня"},
+            "chat_instance": "x",
+            "data": data,
+            "message": _source_message(bot, chat_id),
+        }
+    )
+    return query.as_(bot)
+
+
+async def _fsm_context(bot: Bot) -> FSMContext:
+    storage = MemoryStorage()
+    key = StorageKey(
+        bot_id=int(BOT_TOKEN.split(":")[0]), chat_id=-1, user_id=333
+    )
+    return FSMContext(storage=storage, key=key)
+
+
+def _resolve_group_stub(group):
+    async def stub(bot, session, user, chat, state):
+        return group
+
+    return stub
+
+
+async def test_open_file_sends_media_with_folder_menu(monkeypatch, session) -> None:
+    chat_id = 9101
+    user, service, hw = await _seed_homework(session, attachments=2)
+    group = (await GroupRepository(session).list_groups_for_user(user.id))[0]
+    monkeypatch.setattr(
+        "app.bot.handlers.views.resolve_group", _resolve_group_stub(group)
+    )
+    views_handlers._OPENED_FILE_MESSAGES.clear()
+    recording = RecordingSession()
+    recording.chat_id = chat_id
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    attachments = await service.attachments_for(hw)
+    first, second = attachments
+    context = await _fsm_context(bot)
+
+    await views_handlers.on_open_file(
+        _folder_callback(bot, chat_id, f"{HW_OPEN_FILE}{hw.id}:{first.id}"),
+        bot,
+        session,
+        user,
+        context,
+    )
+    await views_handlers.on_open_file(
+        _folder_callback(bot, chat_id, f"{HW_OPEN_FILE}{hw.id}:{second.id}"),
+        bot,
+        session,
+        user,
+        context,
+    )
+
+    media = [
+        call
+        for call in recording.calls
+        if type(call).__name__ in {"SendPhoto", "EditMessageMedia"}
+    ]
+    assert [type(call).__name__ for call in media] == ["SendPhoto", "EditMessageMedia"]
+    sent = media[0]
+    assert sent.photo == first.telegram_file_id
+    assert sent.reply_markup is not None
+    assert "🔙 К заданию" in {
+        btn.text for row in sent.reply_markup.inline_keyboard for btn in row
+    }
+    edited = media[1]
+    sent_id = next(
+        (msg_id for name, msg_id in recording.results if name == "SendPhoto"), None
+    )
+    assert edited.message_id == sent_id
+    assert edited.media.media == second.telegram_file_id
+    assert edited.media.type == "photo"
+    edited_id = next(
+        (
+            msg_id
+            for name, msg_id in recording.results
+            if name == "EditMessageMedia"
+        ),
+        None,
+    )
+    assert views_handlers._OPENED_FILE_MESSAGES[(chat_id, hw.id)] == edited_id
+
+
+async def test_open_file_document_uses_send_document_with_caption(
+    monkeypatch, session
+) -> None:
+    chat_id = 9102
+    user, service, hw = await _seed_homework(session, attachments=0)
+    await service.add_attachment(
+        hw,
+        telegram_file_id="DOC1",
+        file_type=AttachmentType.DOCUMENT,
+        author_id=user.id,
+        file_name="задание.pdf",
+    )
+    group = (await GroupRepository(session).list_groups_for_user(user.id))[0]
+    monkeypatch.setattr(
+        "app.bot.handlers.views.resolve_group", _resolve_group_stub(group)
+    )
+    views_handlers._OPENED_FILE_MESSAGES.clear()
+    recording = RecordingSession()
+    recording.chat_id = chat_id
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    attachment = (await service.attachments_for(hw))[0]
+    context = await _fsm_context(bot)
+
+    await views_handlers.on_open_file(
+        _folder_callback(bot, chat_id, f"{HW_OPEN_FILE}{hw.id}:{attachment.id}"),
+        bot,
+        session,
+        user,
+        context,
+    )
+
+    sent = next(
+        call for call in recording.calls if type(call).__name__ == "SendDocument"
+    )
+    assert sent.document == attachment.telegram_file_id
+    assert sent.caption == "📎 задание.pdf"
+
+
+async def test_folder_back_deletes_file_preview(monkeypatch, session) -> None:
+    chat_id = 9103
+    user, service, hw = await _seed_homework(session, attachments=1)
+    group = (await GroupRepository(session).list_groups_for_user(user.id))[0]
+    monkeypatch.setattr(
+        "app.bot.handlers.views.resolve_group", _resolve_group_stub(group)
+    )
+    views_handlers._OPENED_FILE_MESSAGES.clear()
+    recording = RecordingSession()
+    recording.chat_id = chat_id
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    attachment = (await service.attachments_for(hw))[0]
+    context = await _fsm_context(bot)
+
+    await views_handlers.on_open_file(
+        _folder_callback(bot, chat_id, f"{HW_OPEN_FILE}{hw.id}:{attachment.id}"),
+        bot,
+        session,
+        user,
+        context,
+    )
+    preview_message_id = next(
+        (msg_id for name, msg_id in recording.results if name == "SendPhoto"), None
+    )
+    assert preview_message_id is not None
+    await views_handlers.on_folder_back(
+        _folder_callback(bot, chat_id, f"{HW_FOLDER_BACK}{hw.id}"),
+        bot,
+        session,
+        user,
+        context,
+    )
+
+    deletes = [
+        call for call in recording.calls if type(call).__name__ == "DeleteMessage"
+    ]
+    assert [call.message_id for call in deletes] == [preview_message_id]
+    assert views_handlers._OPENED_FILE_MESSAGES == {}
