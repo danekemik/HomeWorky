@@ -32,7 +32,7 @@ class HomeworkExistsError(Exception):
 
 
 class HomeworkLimitError(Exception):
-    """Превышен лимит вложений (3 файла/фото на домашку)."""
+    """Превышен лимит вложений (не больше 3 фото, 3 файлов и 3 ссылок)."""
 
 
 class SubjectError(Exception):
@@ -81,8 +81,9 @@ class HomeworkDetail:
 
 
 class HomeworkService:
-    MAX_ATTACHMENTS = 3
-    MAX_LINKS = 20
+    MAX_PHOTOS = 3
+    MAX_FILES = 3
+    MAX_LINKS = 3
 
     def __init__(self, session: AsyncSession) -> None:
         self._repo = HomeworkRepository(session)
@@ -97,9 +98,6 @@ class HomeworkService:
         return await self._repo.find_by_subject_and_deadline(
             group_id, subject_id, deadline
         )
-
-    async def attachment_count(self, homework: Homework) -> int:
-        return await self._repo.count_attachments(homework.id)
 
     async def create_homework(
         self,
@@ -297,7 +295,10 @@ class HomeworkService:
         author_id: int | None = None,
     ) -> Attachment:
         await self._repo.lock(homework.id)
-        if await self._repo.count_attachments(homework.id) >= self.MAX_ATTACHMENTS:
+        limit = self._attachment_limit(file_type)
+        if await self._repo.count_attachments(
+            homework.id, file_type
+        ) >= limit:
             raise HomeworkLimitError
         return await self._repo.add_attachment(
             homework.id,
@@ -306,6 +307,12 @@ class HomeworkService:
             file_name=file_name,
             author_id=author_id,
         )
+
+    @staticmethod
+    def _attachment_limit(file_type: AttachmentType) -> int:
+        if file_type == AttachmentType.PHOTO:
+            return HomeworkService.MAX_PHOTOS
+        return HomeworkService.MAX_FILES
 
     async def delete_attachment(
         self, homework: Homework, attachment_id: int
@@ -338,6 +345,9 @@ class HomeworkService:
         title: str | None = None,
         author_id: int | None = None,
     ) -> HomeworkLink:
+        await self._repo.lock(homework.id)
+        if await self._repo.count_links(homework.id) >= self.MAX_LINKS:
+            raise HomeworkLimitError
         return await self._repo.add_link(
             homework.id, url=url, title=title, author_id=author_id
         )
@@ -350,6 +360,11 @@ class HomeworkService:
 
     async def link_count(self, homework: Homework) -> int:
         return await self._repo.count_links(homework.id)
+
+    async def attachment_count(
+        self, homework: Homework, file_type: AttachmentType | None = None
+    ) -> int:
+        return await self._repo.count_attachments(homework.id, file_type)
 
     async def get_detail(self, homework: Homework) -> HomeworkDetail:
         subject = await self._repo.get_subject_name(homework)

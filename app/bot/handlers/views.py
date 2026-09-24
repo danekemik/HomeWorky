@@ -751,9 +751,15 @@ async def on_add_files(
     if not await service.is_member(user, group.id):
         await query.answer("Добавлять файлы могут только участники группы.", show_alert=True)
         return
-    if await service.attachment_count(homework) >= HomeworkService.MAX_ATTACHMENTS:
+    if (
+        await service.attachment_count(homework, AttachmentType.PHOTO)
+        >= HomeworkService.MAX_PHOTOS
+        and await service.attachment_count(homework, AttachmentType.DOCUMENT)
+        >= HomeworkService.MAX_FILES
+        and await service.link_count(homework) >= HomeworkService.MAX_LINKS
+    ):
         await query.answer(
-            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание.",
+            "Лимит вложений исчерпан: по 3 фото, 3 файла и 3 ссылки на задание.",
             show_alert=True,
         )
         return
@@ -1181,7 +1187,7 @@ async def finalize_edit_attachments(
         )
     except HomeworkLimitError:
         await query.answer(
-            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание.",
+            "Лимит вложений: до 3 фото, 3 файлов и 3 ссылок на задание.",
             show_alert=True,
         )
         return

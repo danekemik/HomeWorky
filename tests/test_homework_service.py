@@ -191,10 +191,12 @@ async def test_same_subject_other_date_allowed(session) -> None:
     assert second.title == "Вторая"
 
 
-async def test_attachment_limit_per_homework(session) -> None:
+async def test_attachment_limit_is_per_type(session) -> None:
     group, owner, _other, _admin, subject = await _seed(session)
     hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
     service = HomeworkService(session)
+    assert HomeworkService.MAX_PHOTOS == 3
+    assert HomeworkService.MAX_FILES == 3
     for i in range(3):
         await service.add_attachment(
             hw,
@@ -210,7 +212,29 @@ async def test_attachment_limit_per_homework(session) -> None:
             file_type=AttachmentType.DOCUMENT,
             author_id=owner.id,
         )
-    assert await service.attachment_count(hw) == 3
+    # лимит файлов не мешает добавить фото (свой лимит на каждый тип)
+    photo = await service.add_attachment(
+        hw,
+        telegram_file_id="PHOTO1",
+        file_type=AttachmentType.PHOTO,
+        author_id=owner.id,
+    )
+    assert photo.file_type == AttachmentType.PHOTO
+    assert await service.attachment_count(hw) == 4
+    for i in range(2):
+        await service.add_attachment(
+            hw,
+            telegram_file_id=f"PHOTO{i}",
+            file_type=AttachmentType.PHOTO,
+            author_id=owner.id,
+        )
+    with pytest.raises(HomeworkLimitError):
+        await service.add_attachment(
+            hw,
+            telegram_file_id="PHOTO_OVER",
+            file_type=AttachmentType.PHOTO,
+            author_id=owner.id,
+        )
 
 
 async def test_add_delete_attachment_by_member(session) -> None:
@@ -366,15 +390,16 @@ async def test_update_homework_clears_description_explicitly(session) -> None:
     assert hw.title == "Новое"
 
 
-async def test_link_count_tracks_links(session) -> None:
+async def test_link_limit_is_three_per_homework(session) -> None:
     group, owner, _other, _admin, subject = await _seed(session)
     hw = await _make_hw(session, group, subject, owner, date(2026, 9, 25))
     service = HomeworkService(session)
-    assert await service.link_count(hw) == 0
-    await service.add_link(hw, url="https://a.example/1")
-    await service.add_link(hw, url="https://b.example/2")
-    assert await service.link_count(hw) == 2
-    assert HomeworkService.MAX_LINKS == 20
+    assert HomeworkService.MAX_LINKS == 3
+    for i in range(3):
+        await service.add_link(hw, url=f"https://link.example/{i}")
+    assert await service.link_count(hw) == 3
+    with pytest.raises(HomeworkLimitError):
+        await service.add_link(hw, url="https://link.example/extra")
 
 
 async def test_create_subject_collapses_internal_whitespace(session) -> None:

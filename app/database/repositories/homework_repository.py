@@ -242,10 +242,16 @@ class HomeworkRepository(BaseRepository[Homework]):
         stmt = delete(Attachment).where(Attachment.id == attachment_id)
         await self._session.execute(stmt)
 
-    async def count_attachments(self, homework_id: int) -> int:
+    async def count_attachments(
+        self,
+        homework_id: int,
+        file_type: AttachmentType | None = None,
+    ) -> int:
         stmt = select(func.count(Attachment.id)).where(
             Attachment.homework_id == homework_id
         )
+        if file_type is not None:
+            stmt = stmt.where(Attachment.file_type == file_type)
         return int((await self._session.scalar(stmt)) or 0)
 
     async def count_links(self, homework_id: int) -> int:

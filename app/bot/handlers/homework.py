@@ -119,14 +119,6 @@ async def render_subject_picker(
     await query.answer()
 
 
-def _attachment_display(item: dict[str, object]) -> str:
-    file_type = str(item.get("file_type"))
-    file_name = item.get("file_name")
-    if file_type == "photo":
-        return "🖼 Фото"
-    return f"📄 {file_name or 'Файл'}"
-
-
 def _pending_preview_card(data: dict) -> str:
     subject = str(data.get("subject_name") or data.get("subject_id") or "—").upper()
     deadline = date.fromisoformat(str(data["deadline"]))
@@ -145,6 +137,8 @@ def _pending_preview_card(data: dict) -> str:
             lines.append("🖼 Фото")
         else:
             lines.append("📎 Файл")
+    for link in data.get("links", []):  # type: ignore[arg-type]
+        lines.append(f"🔗 {esc(str(link.get('title') or link.get('url')))}")
     lines += ["", "Всё сходится.", "Сохраняем?"]
     return "\n".join(lines)
 
@@ -530,75 +524,133 @@ def _extract_link(message: Message) -> str | None:
     return None
 
 
+async def _attachment_totals(
+    service: HomeworkService,
+    session: AsyncSession,
+    data: dict,
+) -> tuple[int, int, int]:
+    """Возвращает (файлы, фото, ссылки) с учётом уже сохранённых в БД."""
+    homework_id = data.get("homework_id")
+    files, photos, links = 0, 0, 0
+    if homework_id is not None:
+        homework = await session.get(Homework, int(homework_id))
+        if homework is not None:
+            photos = await service.attachment_count(homework, AttachmentType.PHOTO)
+            files = await service.attachment_count(
+                homework, AttachmentType.DOCUMENT
+            )
+            links = await service.link_count(homework)
+    for item in data.get("attachments", []):  # type: ignore[arg-type]
+        if str(item.get("file_type")) == AttachmentType.PHOTO.value:
+            photos += 1
+        else:
+            files += 1
+    links += len(data.get("links", []))  # type: ignore[arg-type]
+    return files, photos, links
+
+
+def _attachment_status_text(files: int, photos: int, links: int) -> str:
+    return (
+        "➕ Добавлено: \n"
+        f"📄 Файл × {files} / {HomeworkService.MAX_FILES}\n"
+        f"🖼 Фото × {photos} / {HomeworkService.MAX_PHOTOS}\n"
+        f"🔗 Ссылка × {links} / {HomeworkService.MAX_LINKS}\n"
+        "Можно добавить ещё или «✅ Готово»"
+    )
+
+
+async def _render_attachment_status(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    *,
+    files: int,
+    photos: int,
+    links: int,
+) -> None:
+    """Показывает/обновляет живой счётчик добавленных вложений."""
+    text = _attachment_status_text(files, photos, links)
+    markup = attachment_keyboard(True)
+    data = await state.get_data()
+    msg_id = data.get("attach_status_msg_id")
+    if msg_id is not None:
+        try:
+            await bot.edit_message_text(
+                text,
+                chat_id=message.chat.id,
+                message_id=int(msg_id),
+                reply_markup=markup,
+            )
+            return
+        except Exception:
+            pass
+    sent = await message.answer(text, reply_markup=markup)
+    await state.update_data(attach_status_msg_id=sent.message_id)
+
+
 @router.message(StateFilter(HomeworkCreation.attachment, HomeworkEditField.attachment))
 async def on_attachment_message(
     message: Message, bot: Bot, session: AsyncSession, user: User, state: FSMContext
 ) -> None:
     data = dict(await state.get_data())
+    service = HomeworkService(session)
+
+    if message.document is not None or message.photo:
+        attachment = _collect_attachment(message)
+        if attachment is None:
+            await message.answer(
+                "Принимаются только фото 📷, файлы 📄 и ссылки 🔗.\n"
+                "Или нажми «✅ Готово»."
+            )
+            return
+        kind = AttachmentType(str(attachment["file_type"]))
+        files, photos, links = await _attachment_totals(service, session, data)
+        current = photos if kind == AttachmentType.PHOTO else files
+        limit = (
+            HomeworkService.MAX_PHOTOS
+            if kind == AttachmentType.PHOTO
+            else HomeworkService.MAX_FILES
+        )
+        if current >= limit:
+            label = "фото" if kind == AttachmentType.PHOTO else "файлов"
+            await message.answer(
+                f"Лимит — до {limit} {label} на задание. "
+                "Удалив лишнее, сможешь добавить новое."
+            )
+            return
+        data.setdefault("attachments", []).append(attachment)
+        await state.update_data(**data)
+        files, photos, links = await _attachment_totals(service, session, data)
+        await _render_attachment_status(
+            message, bot, state, files=files, photos=photos, links=links
+        )
+        return
+
     if message.text:
         url = _extract_link(message)
         if url is None:
             await message.answer(
-                "Сюда можно добавить файл 📄, фото 🖼 или ссылку 🔗 "
-                "(скопируй URL и отправь как текст)."
+                "Принимаются только ссылки 🔗 в виде текста с URL, "
+                "фото 📷 и файлы 📄.\nИли нажми «✅ Готово»."
             )
             return
-        homework_id = data.get("homework_id")
-        if homework_id is not None:
-            homework = await session.get(Homework, int(homework_id))
-            if homework is None:
-                await message.answer("Задание не найдено. Нажми «✅ Готово».")
-                return
-            existing_links = await HomeworkService(session).link_count(homework)
-        else:
-            existing_links = 0
-        pending_links = len(data.get("links", []))
-        if existing_links + pending_links >= HomeworkService.MAX_LINKS:
+        files, photos, links = await _attachment_totals(service, session, data)
+        if links >= HomeworkService.MAX_LINKS:
             await message.answer(
-                f"Лимит — {HomeworkService.MAX_LINKS} ссылки на задание. "
-                "Можно добавить файлы или нажми «✅ Готово»."
+                f"Лимит — до {HomeworkService.MAX_LINKS} ссылок на задание. "
+                "Удалив лишнее, сможешь добавить новую."
             )
             return
         data.setdefault("links", []).append({"url": url, "title": None})
         await state.update_data(**data)
-        await message.answer(
-            f"➕ Добавлена ссылка: 🔗 {esc(url)}\n"
-            "Можно добавить ещё или «✅ Готово».",
-            reply_markup=attachment_keyboard(True),
+        files, photos, links = await _attachment_totals(service, session, data)
+        await _render_attachment_status(
+            message, bot, state, files=files, photos=photos, links=links
         )
         return
-    attachment = _collect_attachment(message)
-    if attachment is None:
-        await message.answer(
-            "Пришли файл 📄, фото 🖼, ссылку 🔗 или нажми «✅ Готово»."
-        )
-        return
-    pending = len(data.get("attachments", []))
-    if data.get("homework_id"):
-        homework = await session.get(Homework, int(data["homework_id"]))
-        if homework is None:
-            await message.answer("Задание не найдено. Нажми «✅ Готово».")
-            return
-        existing = await HomeworkService(session).attachment_count(homework)
-    else:
-        existing = 0
-    if existing + pending >= HomeworkService.MAX_ATTACHMENTS:
-        await message.answer(
-            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание. "
-            "Удалив лишнее, сможешь добавить новое."
-        )
-        return
-    data.setdefault("attachments", []).append(attachment)
-    await state.update_data(**data)
-    files = sum(
-        str(item.get("file_type")) != AttachmentType.PHOTO.value
-        for item in data["attachments"]
-    )
-    photos = len(data["attachments"]) - files
+
     await message.answer(
-        f"➕ Добавлено: 📄 файл ×{files}, 🖼 фото ×{photos}. "
-        "Можно добавить ещё или «✅ Готово».",
-        reply_markup=attachment_keyboard(True),
+        "Принимаются только фото 📷, файлы 📄 и ссылки 🔗.\nИли нажми «✅ Готово»."
     )
 
 
@@ -688,7 +740,7 @@ async def _finalize_creation(
         await service.delete_homework(homework)
         await state.clear()
         await query.answer(
-            f"Лимит — {HomeworkService.MAX_ATTACHMENTS} файла на задание.",
+            "Лимит вложений: до 3 фото, 3 файлов и 3 ссылок на задание.",
             show_alert=True,
         )
         return

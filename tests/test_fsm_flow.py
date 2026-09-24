@@ -105,6 +105,53 @@ def _incoming(bot: Bot, text: str, chat_id: int = 1) -> Message:
     return message.as_(bot)
 
 
+def _incoming_link(bot: Bot, url: str, chat_id: int = 1) -> Message:
+    message = Message.model_validate(
+        {
+            "message_id": 11,
+            "date": 0,
+            "chat": {"id": chat_id, "type": "private"},
+            "from_user": {"id": 1, "is_bot": False, "first_name": "Test"},
+            "text": url,
+            "entities": [{"type": "url", "offset": 0, "length": len(url)}],
+        }
+    )
+    return message.as_(bot)
+
+
+def _incoming_document(bot: Bot, chat_id: int = 1) -> Message:
+    message = Message.model_validate(
+        {
+            "message_id": 11,
+            "date": 0,
+            "chat": {"id": chat_id, "type": "private"},
+            "from_user": {"id": 1, "is_bot": False, "first_name": "Test"},
+            "document": {"file_id": "BQ_DOC1", "file_unique_id": "u2", "file_name": "ЛР2.pdf"},
+        }
+    )
+    return message.as_(bot)
+
+
+def _incoming_photo(bot: Bot, chat_id: int = 1) -> Message:
+    message = Message.model_validate(
+        {
+            "message_id": 11,
+            "date": 0,
+            "chat": {"id": chat_id, "type": "private"},
+            "from_user": {"id": 1, "is_bot": False, "first_name": "Test"},
+            "photo": [
+                {
+                    "file_id": "PHOTO_LARGE",
+                    "file_unique_id": "u1",
+                    "width": 500,
+                    "height": 500,
+                }
+            ],
+        }
+    )
+    return message.as_(bot)
+
+
 @pytest.fixture
 def bot() -> Bot:
     return Bot(token=BOT_TOKEN, session=StubSession())
@@ -225,3 +272,93 @@ async def test_create_group_unique_name_succeeds(session, bot, flow):
     assert not any("уже существует" in text for text in bot.session.sent_texts())
     assert await context.get_state() != GroupFlow.create_name.state
     assert len(await groups.list_all()) == before + 1
+
+
+async def test_attachment_step_shows_live_counter(session, bot, flow):
+    _group, user, _subject, context = flow
+    await context.set_state(HomeworkCreation.attachment)
+
+    await homework_handlers.on_attachment_message(
+        message=_incoming_document(bot),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    first = bot.session.sent_texts()[-1]
+    assert "📄 Файл × 1 / 3" in first
+    assert "🖼 Фото × 0 / 3" in first
+    assert "🔗 Ссылка × 0 / 3" in first
+
+    await homework_handlers.on_attachment_message(
+        message=_incoming_photo(bot),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    second = bot.session.texts()[-1]
+    assert "📄 Файл × 1 / 3" in second
+    assert "🖼 Фото × 1 / 3" in second
+    assert "🔗 Ссылка × 0 / 3" in second
+
+    await homework_handlers.on_attachment_message(
+        message=_incoming_link(bot, "https://a.example/1"),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    third = bot.session.texts()[-1]
+    assert "📄 Файл × 1 / 3" in third
+    assert "🖼 Фото × 1 / 3" in third
+    assert "🔗 Ссылка × 1 / 3" in third
+
+    data = await context.get_data()
+    assert len(data["attachments"]) == 2
+    assert len(data["links"]) == 1
+
+
+async def test_attachment_step_rejects_plain_text(session, bot, flow):
+    _group, user, _subject, context = flow
+    await context.set_state(HomeworkCreation.attachment)
+
+    await homework_handlers.on_attachment_message(
+        message=_incoming(bot, "просто текст"),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    assert any(
+        "Принимаются только" in text for text in bot.session.sent_texts()
+    )
+    data = await context.get_data()
+    assert not data.get("attachments")
+    assert not data.get("links")
+
+
+async def test_attachment_step_photo_has_own_limit(session, bot, flow):
+    _group, user, _subject, context = flow
+    await context.set_state(HomeworkCreation.attachment)
+
+    for _ in range(3):
+        await homework_handlers.on_attachment_message(
+            message=_incoming_photo(bot),
+            bot=bot,
+            session=session,
+            user=user,
+            state=context,
+        )
+    last = bot.session.texts()[-1]
+    assert "🖼 Фото × 3 / 3" in last
+    assert "📄 Файл × 0 / 3" in last
+
+    await homework_handlers.on_attachment_message(
+        message=_incoming_photo(bot),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    assert any("Лимит — до 3 фото" in text for text in bot.session.sent_texts())
