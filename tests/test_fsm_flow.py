@@ -3,7 +3,9 @@ from typing import Any
 
 import pytest
 from aiogram import Bot
+from aiogram.client.default import Default, DefaultBotProperties
 from aiogram.client.session.base import BaseSession
+from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -11,6 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from app.bot.callbacks import ATTACH_BACK
 from app.bot.handlers import homework as homework_handlers
 from app.bot.handlers import menu as menu_handlers
+from app.bot.render import edit_or_resend, replace_message_at_bottom
 from app.bot.states.group_flow import GroupFlow
 from app.bot.states.homework import HomeworkCreation
 from app.database.repositories.group_repository import GroupRepository
@@ -401,3 +404,35 @@ async def test_attachment_limit_shows_back_to_counter_button(session, bot, flow)
     last = bot.session.texts()[-1]
     assert "🖼 Фото × 3 / 3" in last
     assert "Можно добавить ещё или «✅ Готово»" in last
+
+
+def _html_bot(default: ParseMode | str) -> Bot:
+    return Bot(
+        token=BOT_TOKEN,
+        session=StubSession(),
+        default=DefaultBotProperties(parse_mode=default),
+    )
+
+
+async def test_edit_or_resend_leaves_parse_mode_to_bot_default() -> None:
+    bot = _html_bot(ParseMode.HTML)
+    await edit_or_resend(_message(bot), "<b>hi</b>")
+    method = bot.session.methods[0]
+    assert type(method).__name__ == "EditMessageText"
+    assert isinstance(method.parse_mode, Default)
+
+
+async def test_edit_or_resend_preserves_explicit_parse_mode() -> None:
+    bot = _html_bot(ParseMode.HTML)
+    await edit_or_resend(_message(bot), "plain", parse_mode=ParseMode.MARKDOWN)
+    method = bot.session.methods[0]
+    assert type(method).__name__ == "EditMessageText"
+    assert method.parse_mode == ParseMode.MARKDOWN
+
+
+async def test_replace_message_at_bottom_leaves_parse_mode_to_bot_default() -> None:
+    bot = _html_bot(ParseMode.HTML)
+    result = await replace_message_at_bottom(_message(bot), "<b>hi</b>")
+    sent = [m for m in bot.session.methods if type(m).__name__ == "SendMessage"]
+    assert result.message_id == 10
+    assert any(isinstance(m.parse_mode, Default) for m in sent)

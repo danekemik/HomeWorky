@@ -20,9 +20,15 @@ async def edit_or_resend(
             await message.delete()
         except Exception:
             pass
-        await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
+        if parse_mode is None:
+            await message.answer(text, reply_markup=markup)
+        else:
+            await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
         return
-    await message.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
+    if parse_mode is None:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
 
 
 async def replace_message_at_bottom(
@@ -36,4 +42,6 @@ async def replace_message_at_bottom(
         await message.delete()
     except Exception:
         pass
+    if parse_mode is None:
+        return await message.answer(text, reply_markup=markup)
     return await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
