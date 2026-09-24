@@ -78,7 +78,7 @@ _CATEGORY_TITLES = {
 
 EMPTY_LINE = "  — заданий нет"
 
-_DETAIL_HEADER = "🐹 Homy достаёт нужную карточку из папки"
+_DETAIL_HEADER = "🐹 *Homy достаёт нужную карточку из папки*"
 
 _ALBUM_MAX_ITEMS = 10
 

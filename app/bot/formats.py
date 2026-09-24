@@ -66,20 +66,21 @@ def build_homework_card(
 ) -> str:
     lines: list[str] = []
     if header:
-        lines += [f"<b>{esc(header)}</b>", ""]
-    lines += [f"📖 {esc(subject.upper())}", "", f"🎯 {esc(title)}"]
+        lines.append(esc(header))
+    lines.append(f"📖 {esc(subject.upper())}")
+    lines += ["", f"🎯 {esc(title)}"]
     if description:
-        lines += ["", f"📝 {esc(description)}"]
+        lines.append(f"📝 {esc(description)}")
     lines += ["", f"📅 {format_date_russian(deadline)}"]
     if attachment_count:
         word = plural_files(attachment_count)
-        lines += ["", f"📎 {attachment_count} {word}"]
+        lines.append(f"📎 {attachment_count} {word}")
     links = link_lines or []
     if links:
-        lines += ["", "🔗 Ссылки:"]
+        lines += ["🔗 Ссылки:"]
         lines += [f"  • {esc(line)}" for line in links]
     if author_name:
-        lines += ["", f"👤 Добавил: {esc(author_name)}"]
+        lines.append(f"👤 Добавил: {esc(author_name)}")
     if footer_note:
-        lines += ["", esc(footer_note)]
+        lines.append(esc(footer_note))
     return "\n".join(lines)

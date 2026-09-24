@@ -336,7 +336,7 @@ def test_members_keyboard_delete_button_next_to_each_member() -> None:
 
 def test_card_format() -> None:
     text = build_homework_card(
-        header="🐹 Homy достаёт нужную карточку из папки",
+        header="🐹 *Homy достаёт нужную карточку из папки*",
         subject="История",
         title="Презентация",
         deadline=date(2026, 9, 24),
@@ -346,13 +346,13 @@ def test_card_format() -> None:
     )
     assert (
         text
-        == "<b>🐹 Homy достаёт нужную карточку из папки</b>\n"
-        "\n📖 ИСТОРИЯ\n"
+        == "🐹 *Homy достаёт нужную карточку из папки*\n"
+        "📖 ИСТОРИЯ\n"
         "\n🎯 Презентация\n"
-        "\n📝 Про племя\n"
+        "📝 Про племя\n"
         "\n📅 24 сентября\n"
-        "\n📎 3 файла\n"
-        "\n👤 Добавил: Даня"
+        "📎 3 файла\n"
+        "👤 Добавил: Даня"
     )
 
 
