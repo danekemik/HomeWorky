@@ -202,7 +202,7 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     assert "📎 2 файла" in text
 
 
-async def test_folder_rows_are_name_view_delete(session) -> None:
+async def test_folder_rows_are_name_and_delete(session) -> None:
     user, service, hw = await _seed_homework(session, attachments=2)
     await service.add_attachment(
         hw,
@@ -229,13 +229,16 @@ async def test_folder_rows_are_name_view_delete(session) -> None:
         )
     ]
     assert [[btn.text for btn in row] for row in rows] == [
-        ["IMG000.jpg", "👁", "🗑"],
-        ["IMG001.jpg", "👁", "🗑"],
-        ["задание.pdf", "👁", "🗑"],
+        ["IMG000.jpg", "🗑"],
+        ["IMG001.jpg", "🗑"],
+        ["задание.pdf", "🗑"],
     ]
+    assert "👁" not in {
+        btn.text for row in rows for btn in row
+    }
 
 
-async def test_folder_open_buttons_use_lazy_file_callback(session) -> None:
+async def test_folder_name_buttons_open_and_unchanged_for_others(session) -> None:
     user, service, hw = await _seed_homework(session, attachments=2)
     await service.add_attachment(
         hw,
@@ -259,17 +262,12 @@ async def test_folder_open_buttons_use_lazy_file_callback(session) -> None:
     ]
     assert [btn.text for btn in open_buttons] == [
         "IMG000.jpg",
-        "👁",
         "IMG001.jpg",
-        "👁",
         "задание.pdf",
-        "👁",
     ]
-    assert [btn.callback_data for btn in open_buttons] == [*[
-        f"{HW_OPEN_FILE}{hw.id}:{item_id}"
-        for item_id in attachment_ids
-        for _ in range(2)
-    ]]
+    assert [btn.callback_data for btn in open_buttons] == [
+        f"{HW_OPEN_FILE}{hw.id}:{item_id}" for item_id in attachment_ids
+    ]
     # открыть можно и неудаляемые вложения (например, чужие файлы)
     _, markup = _folder_payload(
         hw, detail, can_add_files=True, deleteable_attachment_ids=set()
@@ -284,9 +282,9 @@ async def test_folder_open_buttons_use_lazy_file_callback(session) -> None:
         )
     ]
     assert rows == [
-        ["IMG000.jpg", "👁"],
-        ["IMG001.jpg", "👁"],
-        ["задание.pdf", "👁"],
+        ["IMG000.jpg"],
+        ["IMG001.jpg"],
+        ["задание.pdf"],
     ]
 
 
@@ -331,9 +329,9 @@ async def test_delete_buttons_use_global_photo_numbering(session) -> None:
         )
     ]
     assert rows == [
-        ["IMG000.jpg", "👁"],
-        ["тезисы.pdf", "👁", "🗑"],
-        ["IMG001.jpg", "👁", "🗑"],
+        ["IMG000.jpg"],
+        ["тезисы.pdf", "🗑"],
+        ["IMG001.jpg", "🗑"],
     ]
 
 
@@ -604,5 +602,5 @@ async def test_folder_back_deletes_file_preview(monkeypatch, session) -> None:
     deletes = [
         call for call in recording.calls if type(call).__name__ == "DeleteMessage"
     ]
-    assert [call.message_id for call in deletes] == [preview_message_id]
+    assert preview_message_id in [call.message_id for call in deletes]
     assert views_handlers._OPENED_FILE_MESSAGES == {}

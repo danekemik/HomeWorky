@@ -194,7 +194,7 @@ def _attachment_menu_rows(
     detail: HomeworkDetail,
     deleteable_attachment_ids: set[int],
 ) -> list[list[InlineKeyboardButton]]:
-    """Ряды меню папки: [название] [👁] [🗑] по одной вложению в ряд."""
+    """Ряды меню папки: [название] [🗑] по одному вложению в ряд."""
     rows: list[list[InlineKeyboardButton]] = []
     photo_index = 0
     for item in detail.attachments:
@@ -203,13 +203,11 @@ def _attachment_menu_rows(
             photo_index += 1
         else:
             label = clamp_file_name(item.file_name or "Файл")
-        open_data = f"{HW_OPEN_FILE}{homework.id}:{item.id}"
         row = [
             InlineKeyboardButton(
-                text=clamp_button_text(label, limit=20),
-                callback_data=open_data,
-            ),
-            InlineKeyboardButton(text="👁", callback_data=open_data),
+                text=clamp_button_text(label, limit=28),
+                callback_data=f"{HW_OPEN_FILE}{homework.id}:{item.id}",
+            )
         ]
         if item.id in deleteable_attachment_ids:
             row.append(
@@ -800,6 +798,16 @@ async def on_open_file(
         except Exception:
             pass
     chat_id = query.message.chat.id
+    if (
+        not query.message.photo
+        and not query.message.document
+        and not query.message.video
+    ):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+    await _delete_file_preview(bot, chat_id, homework_id)
     if attachment.file_type == AttachmentType.PHOTO:
         sent = await bot.send_photo(
             chat_id,

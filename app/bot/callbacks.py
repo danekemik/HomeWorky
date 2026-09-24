@@ -8,6 +8,7 @@ SUBJECT_PICK = "subj:"  # subj:{subject_id} | subj:new
 CALENDAR = "cal:"  # cal:nav:{YYYY-MM} | cal:day:{YYYY-MM-DD}
 ATTACH_DONE = "att:done"
 ATTACH_SKIP = "att:skip"
+ATTACH_BACK = "att:back"
 SKIP = "hw:skip"
 FLOW_CANCEL = "flow:cancel"
 HW_SAVE = "hw:create:save"

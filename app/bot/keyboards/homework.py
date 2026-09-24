@@ -2,6 +2,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.callbacks import (
+    ATTACH_BACK,
     ATTACH_DONE,
     ATTACH_SKIP,
     FLOW_CANCEL,
@@ -53,6 +54,12 @@ def attachment_keyboard(has_attachments: bool = False) -> InlineKeyboardMarkup:
         text=("✅ Готово" if has_attachments else "➡️ Пропустить"),
         callback_data=(ATTACH_DONE if has_attachments else ATTACH_SKIP),
     )
+    return builder.as_markup()
+
+
+def attachment_back_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="↩️ К добавлению", callback_data=ATTACH_BACK)
     return builder.as_markup()
 
 

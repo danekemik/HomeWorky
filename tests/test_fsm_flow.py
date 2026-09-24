@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
+from app.bot.callbacks import ATTACH_BACK
 from app.bot.handlers import homework as homework_handlers
 from app.bot.handlers import menu as menu_handlers
 from app.bot.states.group_flow import GroupFlow
@@ -361,4 +362,42 @@ async def test_attachment_step_photo_has_own_limit(session, bot, flow):
         user=user,
         state=context,
     )
-    assert any("Лимит — до 3 фото" in text for text in bot.session.sent_texts())
+    assert any("Лимит — до 3 фото" in text for text in bot.session.texts())
+    data = await context.get_data()
+    assert len(data["attachments"]) == 3
+
+
+async def test_attachment_limit_shows_back_to_counter_button(session, bot, flow):
+    _group, user, _subject, context = flow
+    await context.set_state(HomeworkCreation.attachment)
+
+    for _ in range(3):
+        await homework_handlers.on_attachment_message(
+            message=_incoming_photo(bot),
+            bot=bot,
+            session=session,
+            user=user,
+            state=context,
+        )
+    await homework_handlers.on_attachment_message(
+        message=_incoming_photo(bot),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+
+    back_markup = bot.session.methods[-1].reply_markup
+    back_button = back_markup.inline_keyboard[0][0]
+    assert back_button.text == "↩️ К добавлению"
+    assert back_button.callback_data == ATTACH_BACK
+    await homework_handlers.on_attachment_back(
+        query=_callback(bot, ATTACH_BACK),
+        bot=bot,
+        session=session,
+        user=user,
+        state=context,
+    )
+    last = bot.session.texts()[-1]
+    assert "🖼 Фото × 3 / 3" in last
+    assert "Можно добавить ещё или «✅ Готово»" in last

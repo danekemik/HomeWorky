@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.calendar import build_calendar_markup
 from app.bot.callbacks import (
+    ATTACH_BACK,
     ATTACH_DONE,
     ATTACH_SKIP,
     CALENDAR,
@@ -29,6 +30,7 @@ from app.bot.formats import (
     format_date_russian,
 )
 from app.bot.keyboards.homework import (
+    attachment_back_keyboard,
     attachment_keyboard,
     back_only_keyboard,
     pending_edit_fields_keyboard,
@@ -559,18 +561,15 @@ def _attachment_status_text(files: int, photos: int, links: int) -> str:
     )
 
 
-async def _render_attachment_status(
+async def _edit_attachment_message(
     message: Message,
     bot: Bot,
     state: FSMContext,
     *,
-    files: int,
-    photos: int,
-    links: int,
+    text: str,
+    markup,
 ) -> None:
-    """Показывает/обновляет живой счётчик добавленных вложений."""
-    text = _attachment_status_text(files, photos, links)
-    markup = attachment_keyboard(True)
+    """Правит живой статус вложений; при невозможности — шлёт заново."""
     data = await state.get_data()
     msg_id = data.get("attach_status_msg_id")
     if msg_id is not None:
@@ -586,6 +585,25 @@ async def _render_attachment_status(
             pass
     sent = await message.answer(text, reply_markup=markup)
     await state.update_data(attach_status_msg_id=sent.message_id)
+
+
+async def _render_attachment_status(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    *,
+    files: int,
+    photos: int,
+    links: int,
+) -> None:
+    """Показывает/обновляет живой счётчик добавленных вложений."""
+    await _edit_attachment_message(
+        message,
+        bot,
+        state,
+        text=_attachment_status_text(files, photos, links),
+        markup=attachment_keyboard(True),
+    )
 
 
 @router.message(StateFilter(HomeworkCreation.attachment, HomeworkEditField.attachment))
@@ -613,9 +631,13 @@ async def on_attachment_message(
         )
         if current >= limit:
             label = "фото" if kind == AttachmentType.PHOTO else "файлов"
-            await message.answer(
-                f"Лимит — до {limit} {label} на задание. "
-                "Удалив лишнее, сможешь добавить новое."
+            await _edit_attachment_message(
+                message,
+                bot,
+                state,
+                text=f"Лимит — до {limit} {label} на задание. "
+                "Удалив лишнее, сможешь добавить новое.",
+                markup=attachment_back_keyboard(),
             )
             return
         data.setdefault("attachments", []).append(attachment)
@@ -636,9 +658,13 @@ async def on_attachment_message(
             return
         files, photos, links = await _attachment_totals(service, session, data)
         if links >= HomeworkService.MAX_LINKS:
-            await message.answer(
-                f"Лимит — до {HomeworkService.MAX_LINKS} ссылок на задание. "
-                "Удалив лишнее, сможешь добавить новую."
+            await _edit_attachment_message(
+                message,
+                bot,
+                state,
+                text=f"Лимит — до {HomeworkService.MAX_LINKS} ссылок на задание. "
+                "Удалив лишнее, сможешь добавить новую.",
+                markup=attachment_back_keyboard(),
             )
             return
         data.setdefault("links", []).append({"url": url, "title": None})
@@ -652,6 +678,35 @@ async def on_attachment_message(
     await message.answer(
         "Принимаются только фото 📷, файлы 📄 и ссылки 🔗.\nИли нажми «✅ Готово»."
     )
+
+
+@router.callback_query(
+    StateFilter(HomeworkCreation.attachment, HomeworkEditField.attachment),
+    CallbackDataPrefix(ATTACH_BACK),
+)
+async def on_attachment_back(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    """Возвращает из сообщения о лимите к живому счётчику вложений."""
+    if not isinstance(query.message, Message):
+        await query.answer()
+        return
+    data = dict(await state.get_data())
+    files, photos, links = await _attachment_totals(
+        HomeworkService(session), session, data
+    )
+    await _edit_attachment_message(
+        query.message,
+        bot,
+        state,
+        text=_attachment_status_text(files, photos, links),
+        markup=attachment_keyboard(True),
+    )
+    await query.answer()
 
 
 def _created_confirmation_card(detail: HomeworkDetail, homework: Homework) -> str:
