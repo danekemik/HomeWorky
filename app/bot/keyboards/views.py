@@ -6,6 +6,7 @@ from app.bot.callbacks import (
     HW_DELETE_FILE_CONFIRM,
     HW_DETAIL,
     HW_EDIT_FIELD,
+    HW_FOLDER_BACK,
     MENU_BACK,
     PAGE,
     VIEWS,
@@ -73,7 +74,7 @@ def attachment_delete_confirm_keyboard(
         text="🗑 Да, удалить",
         callback_data=f"{HW_DELETE_FILE_CONFIRM}{homework_id}:{attachment_id}",
     )
-    builder.button(text="❌ Нет", callback_data=f"{HW_DETAIL}{homework_id}")
+    builder.button(text="❌ Нет", callback_data=f"{HW_FOLDER_BACK}{homework_id}")
     builder.adjust(2)
     return builder.as_markup()
 

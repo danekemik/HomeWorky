@@ -260,9 +260,16 @@ class HomeworkRepository(BaseRepository[Homework]):
         await self._session.execute(stmt)
 
     async def add_link(
-        self, homework_id: int, *, url: str, title: str | None = None
+        self,
+        homework_id: int,
+        *,
+        url: str,
+        title: str | None = None,
+        author_id: int | None = None,
     ) -> HomeworkLink:
-        link = HomeworkLink(homework_id=homework_id, url=url, title=title)
+        link = HomeworkLink(
+            homework_id=homework_id, url=url, title=title, author_id=author_id
+        )
         self._session.add(link)
         await self._session.flush()
         return link

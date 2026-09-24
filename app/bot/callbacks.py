@@ -24,5 +24,7 @@ HW_EDIT_FIELD = "hw:fld:"  # hw:fld:{field[|homework_id]}
 HW_ADD_FILES = "hw:addf:"  # hw:addf:{homework_id}
 HW_DELETE_FILE = "hw:delf:"  # hw:delf:{homework_id}:{attachment_id}
 HW_DELETE_FILE_CONFIRM = "hw:delfc:"  # hw:delfc:{homework_id}:{attachment_id}
+HW_OPEN_FOLDER = "hw:folder:"  # hw:folder:{homework_id}
+HW_FOLDER_BACK = "hw:fback:"  # hw:fback:{homework_id}
 DETAIL_BACK = "hw:back:"  # hw:back:{homework_id}
 MENU_BACK = "menu:main"

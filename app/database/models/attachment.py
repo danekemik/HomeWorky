@@ -42,6 +42,9 @@ class HomeworkLink(Base):
     homework_id: Mapped[int] = mapped_column(
         ForeignKey("homeworks.id", ondelete="CASCADE"), index=True
     )
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     url: Mapped[str] = mapped_column(String(2048))
     title: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(

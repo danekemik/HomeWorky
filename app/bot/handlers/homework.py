@@ -939,7 +939,7 @@ async def on_flow_cancel(
             await query.answer()
             return
         if data.get("add_only"):
-            from app.bot.handlers.views import _open_detail
+            from app.bot.handlers.views import _open_folder_after_changes
 
             service = HomeworkService(session)
             group = await resolve_group(
@@ -952,7 +952,7 @@ async def on_flow_cancel(
             )
             if homework is not None:
                 await state.clear()
-                await _open_detail(
+                await _open_folder_after_changes(
                     message, bot, session, user, service, homework
                 )
                 await query.answer()

@@ -4,11 +4,18 @@ from typing import Any
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
-from app.bot.callbacks import DETAIL_BACK, HW_DELETE_FILE, HW_DELETE_FILE_CONFIRM
+from app.bot.callbacks import (
+    DETAIL_BACK,
+    HW_DELETE_FILE,
+    HW_DELETE_FILE_CONFIRM,
+    HW_FOLDER_BACK,
+    HW_OPEN_FOLDER,
+)
 from app.bot.formats import build_homework_card, plural_files
 from app.bot.handlers.views import (
     _attachment_send_plan,
     _detail_payload,
+    _folder_payload,
     _open_detail,
 )
 from app.bot.keyboards.views import attachment_delete_confirm_keyboard
@@ -222,22 +229,19 @@ async def test_detail_buttons_grouped_and_back_to_list(session) -> None:
     assert any(btn.text == "✏️ Изменить" for btn in rows[0])
     assert any(btn.text == "🗑 Удалить" for btn in rows[0])
     assert len(rows[0]) == 2
-    delete_rows = [
-        row
-        for row in rows
-        if any(
-            btn.callback_data is not None
-            and btn.callback_data.startswith(HW_DELETE_FILE)
-            for btn in row
-        )
-    ]
-    assert len(delete_rows) == 1
-    assert len(delete_rows[0]) == 2
-    delete_labels = {btn.text for btn in delete_rows[0]}
-    assert delete_labels == {"🗑 Фото 1", "🗑 Фото 2"}
+    folder_button = next(
+        btn for btn in rows[1] if btn.callback_data == f"{HW_OPEN_FOLDER}{hw.id}"
+    )
+    assert folder_button.text == "📁 Посмотреть файлы"
     back = rows[-1][0]
     assert back.text == "🔙 К списку"
     assert back.callback_data == f"{DETAIL_BACK}{hw.id}"
+    _, folder_markup = _folder_payload(
+        hw, detail, can_add_files=True, deleteable_attachment_ids=deleteable
+    )
+    folder_back = folder_markup.inline_keyboard[-1][0]
+    assert folder_back.text == "🔙 К заданию"
+    assert folder_back.callback_data == f"{HW_FOLDER_BACK}{hw.id}"
     assert "🔗" not in text
     assert "📎 2 файла" in text
 
@@ -253,8 +257,8 @@ async def test_detail_delete_buttons_photos_numbered_and_files_named(session) ->
     )
     detail = await service.get_detail(hw)
     deleteable = {item.id for item in detail.attachments}
-    _, markup = _detail_payload(
-        hw, detail, can_modify=True, can_add_files=True, deleteable_attachment_ids=deleteable
+    _, markup = _folder_payload(
+        hw, detail, can_add_files=True, deleteable_attachment_ids=deleteable
     )
     buttons = [
         btn
@@ -264,8 +268,8 @@ async def test_detail_delete_buttons_photos_numbered_and_files_named(session) ->
         and btn.callback_data.startswith(HW_DELETE_FILE)
     ]
     assert [btn.text for btn in buttons] == [
-        "🗑 Фото 1",
-        "🗑 Фото 2",
+        "🗑 IMG000.jpg",
+        "🗑 IMG001.jpg",
         "🗑 задание.pdf",
     ]
 
@@ -295,8 +299,8 @@ async def test_delete_buttons_use_global_photo_numbering(session) -> None:
     )
     # первое фото не подлежит удалению — кнопки нет, но нумерация глобальная
     deleteable = {photos[1].id, doc.id}
-    _, markup = _detail_payload(
-        hw, detail, can_modify=True, can_add_files=True, deleteable_attachment_ids=deleteable
+    _, markup = _folder_payload(
+        hw, detail, can_add_files=True, deleteable_attachment_ids=deleteable
     )
     labels = [
         btn.text
@@ -305,7 +309,7 @@ async def test_delete_buttons_use_global_photo_numbering(session) -> None:
         if btn.callback_data is not None
         and btn.callback_data.startswith(HW_DELETE_FILE)
     ]
-    assert labels == ["🗑 тезисы.pdf", "🗑 Фото 2"]
+    assert labels == ["🗑 тезисы.pdf", "🗑 IMG001.jpg"]
 
 
 def test_attachment_delete_confirm_keyboard() -> None:

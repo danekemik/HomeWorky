@@ -1,3 +1,4 @@
+from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardMarkup, Message
 
 
@@ -5,6 +6,7 @@ async def edit_or_resend(
     message: Message,
     text: str,
     markup: InlineKeyboardMarkup | None = None,
+    parse_mode: ParseMode | str | None = None,
 ) -> None:
     if (
         message.photo
@@ -18,6 +20,6 @@ async def edit_or_resend(
             await message.delete()
         except Exception:
             pass
-        await message.answer(text, reply_markup=markup)
+        await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
         return
-    await message.edit_text(text, reply_markup=markup)
+    await message.edit_text(text, reply_markup=markup, parse_mode=parse_mode)

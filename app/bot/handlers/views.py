@@ -26,6 +26,8 @@ from app.bot.callbacks import (
     HW_DETAIL,
     HW_EDIT,
     HW_EDIT_FIELD,
+    HW_FOLDER_BACK,
+    HW_OPEN_FOLDER,
     MENU_BACK,
     PAGE,
     VIEWS,
@@ -34,11 +36,16 @@ from app.bot.context import resolve_group, select_current_group
 from app.bot.filters.callback import CallbackDataPrefix
 from app.bot.formats import (
     bot_today,
+    build_folder_card,
     build_homework_card,
     clamp_button_text,
+    clamp_file_name,
     esc,
     format_date_russian,
     format_homework_label,
+    link_html,
+    link_label,
+    photo_label,
     safe_int,
 )
 from app.bot.keyboards.homework import (
@@ -62,7 +69,6 @@ from app.bot.states.homework import HomeworkCreation, HomeworkEditField
 from app.database.models import Attachment, AttachmentType, Homework, User
 from app.dates import russian_month_name_short
 from app.services.homework_service import (
-    AttachmentInfo,
     HomeworkDetail,
     HomeworkLimitError,
     HomeworkService,
@@ -218,32 +224,13 @@ def _detail_payload(
                 text="🗑 Удалить", callback_data=f"{HW_DELETE}{homework.id}"
             ),
         )
-    if can_add_files:
+    if can_add_files or detail.attachments:
         builder.row(
             InlineKeyboardButton(
-                text="📎 Добавить файлы",
-                callback_data=f"{HW_ADD_FILES}{homework.id}",
+                text="📁 Посмотреть файлы",
+                callback_data=f"{HW_OPEN_FOLDER}{homework.id}",
             )
         )
-    delete_buttons: list[InlineKeyboardButton] = []
-    photo_number = 0
-    for item in detail.attachments:
-        if item.file_type == AttachmentType.PHOTO:
-            photo_number += 1
-        if item.id not in deleteable_attachment_ids:
-            continue
-        if item.file_type == AttachmentType.PHOTO:
-            label = f"🗑 Фото {photo_number}"
-        else:
-            label = f"🗑 {item.file_name or 'Файл'}"
-        delete_buttons.append(
-            InlineKeyboardButton(
-                text=clamp_button_text(label),
-                callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
-            )
-        )
-    for index in range(0, len(delete_buttons), 2):
-        builder.row(*delete_buttons[index : index + 2])
     builder.row(
         InlineKeyboardButton(
             text="🔙 К списку", callback_data=f"{DETAIL_BACK}{homework.id}"
@@ -252,13 +239,63 @@ def _detail_payload(
     return text, builder.as_markup()
 
 
-def _attachment_line(item: AttachmentInfo) -> str:
-    name = item.file_name or (
-        "🖼 Фото" if item.file_type == AttachmentType.PHOTO else "📄 Файл"
+def _author_suffix(name: str, author: str | None) -> str:
+    return f"{name} — {author}" if author else name
+
+
+def _folder_payload(
+    homework: Homework,
+    detail: HomeworkDetail,
+    can_add_files: bool,
+    deleteable_attachment_ids: set[int],
+) -> tuple[str, InlineKeyboardMarkup]:
+    photo_lines: list[str] = []
+    file_lines: list[str] = []
+    delete_buttons: list[InlineKeyboardButton] = []
+    photo_index = 0
+    for item in detail.attachments:
+        if item.file_type == AttachmentType.PHOTO:
+            label = photo_label(photo_index)
+            photo_index += 1
+            photo_lines.append(_author_suffix(label, item.author_name))
+        else:
+            label = clamp_file_name(item.file_name or "Файл")
+            file_lines.append(_author_suffix(label, item.author_name))
+        if item.id in deleteable_attachment_ids:
+            delete_buttons.append(
+                InlineKeyboardButton(
+                    text=clamp_button_text(f"🗑 {label}"),
+                    callback_data=f"{HW_DELETE_FILE}{homework.id}:{item.id}",
+                )
+            )
+    link_lines = [
+        link_html(link.url, link_label(link.url, link.title), link.author_name)
+        for link in detail.links
+    ]
+    text = build_folder_card(
+        photo_lines=photo_lines,
+        file_lines=file_lines,
+        link_lines=link_lines,
     )
-    if item.author_name:
-        return f"{name} — {item.author_name}"
-    return name
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    builder = InlineKeyboardBuilder()
+    if can_add_files:
+        builder.row(
+            InlineKeyboardButton(
+                text="📎 Добавить файлы",
+                callback_data=f"{HW_ADD_FILES}{homework.id}",
+            )
+        )
+    for index in range(0, len(delete_buttons), 2):
+        builder.row(*delete_buttons[index : index + 2])
+    builder.row(
+        InlineKeyboardButton(
+            text="🔙 К заданию",
+            callback_data=f"{HW_FOLDER_BACK}{homework.id}",
+        )
+    )
+    return text, builder.as_markup()
 
 
 async def _deleteable_attachment_ids(
@@ -285,7 +322,8 @@ async def _open_detail(
     homework: Homework,
     *,
     delete_source: bool = True,
-) -> None:
+) -> Message | None:
+    """Показывает карточку задания; возвращает сообщение-карточку (или None)."""
     detail = await service.get_detail(homework)
     can_modify = await service.can_modify(user, homework.group_id, homework)
     can_add_files = await service.is_member(user, homework.group_id)
@@ -307,7 +345,7 @@ async def _open_detail(
             bot, chat_id, homework_id, exclude=message.message_id
         )
         await edit_or_resend(message, text, markup)
-        return
+        return message
     if delete_source:
         try:
             await message.delete()
@@ -359,6 +397,7 @@ async def _open_detail(
                 )
         sent.append(await bot.send_message(chat_id, text, reply_markup=markup))
         _remember_detail(chat_id, homework_id, sent)
+        return sent[-1]
     except Exception:
         try:
             await bot.send_message(chat_id, text, reply_markup=markup)
@@ -376,6 +415,56 @@ async def _open_detail(
                     )
             except Exception:
                 pass
+        return None
+
+
+async def _open_folder_view(
+    message: Message,
+    service: HomeworkService,
+    homework: Homework,
+    user: User,
+) -> None:
+    """Показывает «папку» файлов, переписывая сообщение-карточку."""
+    detail = await service.get_detail(homework)
+    can_add_files = await service.is_member(user, homework.group_id)
+    deleteables = await _deleteable_attachment_ids(
+        service, user, homework, detail
+    )
+    text, markup = _folder_payload(homework, detail, can_add_files, deleteables)
+    await edit_or_resend(message, text, markup, parse_mode=ParseMode.HTML)
+
+
+async def _show_card_text(
+    message: Message,
+    service: HomeworkService,
+    homework: Homework,
+    user: User,
+) -> None:
+    """Возвращает папку к карточке задания (без пересборки альбома)."""
+    detail = await service.get_detail(homework)
+    can_modify = await service.can_modify(user, homework.group_id, homework)
+    can_add_files = await service.is_member(user, homework.group_id)
+    deleteables = await _deleteable_attachment_ids(
+        service, user, homework, detail
+    )
+    text, markup = _detail_payload(
+        homework, detail, can_modify, can_add_files, deleteables
+    )
+    await edit_or_resend(message, text, markup)
+
+
+async def _open_folder_after_changes(
+    message: Message,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    service: HomeworkService,
+    homework: Homework,
+) -> None:
+    """После добавления/удаления вложений пересобирает вид и остаётся в папке."""
+    card = await _open_detail(message, bot, session, user, service, homework)
+    if card is not None:
+        await _open_folder_view(card, service, homework, user)
 
 
 def _album_media(
@@ -690,6 +779,62 @@ async def on_detail_back(
     await _back_to_menu(query.message, bot, session, user, state)
 
 
+@router.callback_query(CallbackDataPrefix(HW_OPEN_FOLDER))
+async def on_open_folder(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    homework_id = safe_int(query.data[len(HW_OPEN_FOLDER):])
+    if homework_id is None:
+        await query.answer()
+        return
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
+        await query.answer("Задание не найдено.", show_alert=True)
+        return
+    await _open_folder_view(query.message, service, homework, user)
+    await query.answer()
+
+
+@router.callback_query(CallbackDataPrefix(HW_FOLDER_BACK))
+async def on_folder_back(
+    query: CallbackQuery,
+    bot: Bot,
+    session: AsyncSession,
+    user: User,
+    state: FSMContext,
+) -> None:
+    if not query.data or not isinstance(query.message, Message):
+        await query.answer()
+        return
+    homework_id = safe_int(query.data[len(HW_FOLDER_BACK):])
+    if homework_id is None:
+        await query.answer()
+        return
+    group = await resolve_group(bot, session, user, query.message.chat, state)
+    if group is None:
+        await query.answer(NO_GROUP_TEXT, show_alert=True)
+        return
+    service = HomeworkService(session)
+    homework = await service.get_for_group(homework_id, group.id)
+    if homework is None:
+        await query.answer("Задание не найдено.", show_alert=True)
+        return
+    await _show_card_text(query.message, service, homework, user)
+    await query.answer()
+
+
 @router.callback_query(CallbackDataPrefix(HW_ADD_FILES))
 async def on_add_files(
     query: CallbackQuery,
@@ -846,7 +991,9 @@ async def on_delete_file_confirm(
         )
         return
     await service.delete_attachment(homework, attachment_id)
-    await _open_detail(query.message, bot, session, user, service, homework)
+    await _open_folder_after_changes(
+        query.message, bot, session, user, service, homework
+    )
     await query.answer("Файл удалён.")
 
 

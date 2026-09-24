@@ -69,6 +69,7 @@ class AttachmentInfo:
 class LinkInfo:
     url: str
     title: str | None
+    author_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -330,10 +331,15 @@ class HomeworkService:
         return membership is not None
 
     async def add_link(
-        self, homework: Homework, *, url: str, title: str | None = None
+        self,
+        homework: Homework,
+        *,
+        url: str,
+        title: str | None = None,
+        author_id: int | None = None,
     ) -> HomeworkLink:
         return await self._repo.add_link(
-            homework.id, url=url, title=title
+            homework.id, url=url, title=title, author_id=author_id
         )
 
     async def attachments_for(self, homework: Homework) -> list[Attachment]:
@@ -348,8 +354,11 @@ class HomeworkService:
     async def get_detail(self, homework: Homework) -> HomeworkDetail:
         subject = await self._repo.get_subject_name(homework)
         attachments = await self._repo.attachments_for(homework.id)
+        links = await self._repo.links_for(homework.id)
         author_ids = {homework.author_id} | {
             item.author_id for item in attachments if item.author_id is not None
+        } | {
+            item.author_id for item in links if item.author_id is not None
         }
         authors = await self._users.get_many(author_ids)
         attachments_info = [
@@ -366,15 +375,23 @@ class HomeworkService:
             )
             for item in attachments
         ]
-        links = [
-            LinkInfo(url=link.url, title=link.title)
-            for link in await self._repo.links_for(homework.id)
+        links_info = [
+            LinkInfo(
+                url=link.url,
+                title=link.title,
+                author_name=(
+                    self._author_label(authors.get(link.author_id))
+                    if link.author_id is not None
+                    else None
+                ),
+            )
+            for link in links
         ]
         return HomeworkDetail(
             subject=subject,
             author_name=self._author_label(authors.get(homework.author_id)),
             attachments=attachments_info,
-            links=links,
+            links=links_info,
         )
 
     async def attach_pending(
@@ -399,6 +416,7 @@ class HomeworkService:
                 homework,
                 url=str(item["url"]),
                 title=str(title) if title else None,
+                author_id=author_id,
             )
 
     async def stats(self, group_id: int, user_id: int, today: date) -> dict[str, int]:

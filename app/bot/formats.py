@@ -52,6 +52,69 @@ def plural_files(count: int) -> str:
     return "файлов"
 
 
+FOLDER_HEADER = "🐹 *Homy открывает папку*"
+
+_FOLDER_EMPTY_NOTE = "Тут пока пусто — никто ещё не добавлял вложения."
+
+
+def clamp_file_name(name: str, limit: int = 40) -> str:
+    """Сокращает имя файла, сохраняя расширение (если оно короткое)."""
+    name = (name or "").strip()
+    if len(name) <= limit:
+        return name
+    ext = ""
+    dot = name.rfind(".")
+    candidate = name[dot:] if dot != -1 else ""
+    if 0 < len(candidate) <= 10:
+        ext = candidate
+        name = name[:dot]
+    head = name[: max(0, limit - 1 - len(ext))]
+    return head + "…" + ext
+
+
+def photo_label(index: int) -> str:
+    """Отображаемое имя фото: IMG000.jpg, IMG001.jpg, ..."""
+    return f"IMG{index:03d}.jpg"
+
+
+def link_label(url: str, title: str | None, limit: int = 50) -> str:
+    text = (title or url).strip()
+    if not text:
+        return ""
+    if text.startswith("http://") or text.startswith("https://"):
+        text = text.split("://", 1)[1]
+    return clamp_file_name(text, limit=limit)
+
+
+def link_html(url: str, label: str, author: str | None) -> str:
+    """Кликабельная ссылка вида <a href=...>label</a> — автор."""
+    href = _escape(url or "", quote=True)
+    rendered = f'<a href="{href}">{esc(label)}</a>'
+    if author:
+        rendered += f" — {esc(author)}"
+    return rendered
+
+
+def build_folder_card(
+    *,
+    photo_lines: list[str],
+    file_lines: list[str],
+    link_lines: list[str],
+) -> str:
+    """Сообщение «папки»: секции ФОТО/ФАЙЛЫ/ССЫЛКИ, только непустые."""
+    parts: list[str] = []
+    if photo_lines:
+        parts += ["📷 ФОТО", *[f"• {line}" for line in photo_lines], ""]
+    if file_lines:
+        parts += ["📄 ФАЙЛЫ", *[f"• {line}" for line in file_lines], ""]
+    if link_lines:
+        parts += ["🔗 ССЫЛКИ", *[f"• {line}" for line in link_lines], ""]
+    body = "\n".join(parts).rstrip()
+    if not parts:
+        body = _FOLDER_EMPTY_NOTE
+    return f"{FOLDER_HEADER}\n{body}"
+
+
 def build_homework_card(
     *,
     subject: str,
