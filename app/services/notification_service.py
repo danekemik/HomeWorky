@@ -44,6 +44,18 @@ class NotificationService:
         lines.append(f"📊 Всего заданий: {len(items)}")
         return "\n".join(lines).rstrip()
 
+    def build_empty_text(self, target: date) -> str:
+        """Сообщение на случай, когда на завтра дедлайнов нет."""
+        return "\n".join(
+            [
+                "😴 ДЕДЛАЙНОВ НА ЗАВТРА НЕТ",
+                "",
+                f"📅 {target.day} {russian_month_name(target.month)}",
+                "",
+                "Ничего не горит — можно выдохнуть.",
+            ]
+        )
+
 
 def format_deadline(deadline: date) -> str:
     return f"{deadline.day}.{deadline.month:02d}.{deadline.year}"

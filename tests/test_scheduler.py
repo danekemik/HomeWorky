@@ -200,3 +200,27 @@ async def test_send_tomorrow_digests_does_not_duplicate(
     )
 
     assert recording.sent == []
+
+
+async def test_send_tomorrow_digests_empty_day_still_notifies(
+    session, session_factory
+) -> None:
+    """Завтра дедлайнов нет — группа получает сообщение «дедлайнов нет»."""
+    now = datetime(2026, 9, 21, 20, 0, 5, tzinfo=settings.tz)
+
+    await _bound_group(session, 9101, "А", None)
+
+    groups = list(await GroupRepository(session).list_all())
+    await session.commit()
+
+    recording = RecordingSession()
+    bot = Bot(token=BOT_TOKEN, session=recording)
+    await _send_tomorrow_digests(
+        bot,
+        cast(DatabaseType, _FakeDatabase(session_factory)),
+        now,
+        groups,
+        settings,
+    )
+
+    assert recording.sent == [groups[0].telegram_chat_id]

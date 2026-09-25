@@ -125,9 +125,11 @@ async def _send_tomorrow_digests(
                 continue
             try:
                 items = await service.collect_digest(group.id, target)
-                text = service.build_digest_text(target, items)
-                if not text or group.telegram_chat_id is None:
+                if group.telegram_chat_id is None:
                     continue
+                text = service.build_digest_text(target, items)
+                if not text:
+                    text = service.build_empty_text(target)
                 await bot.send_message(group.telegram_chat_id, text)
                 last_sent[group.id] = now.date()
                 await asyncio.sleep(0.05)

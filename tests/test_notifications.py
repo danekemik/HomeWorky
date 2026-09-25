@@ -61,3 +61,10 @@ async def test_build_digest_text(session) -> None:
 async def test_build_digest_text_empty(session) -> None:
     service = NotificationService(session)
     assert service.build_digest_text(date(2026, 9, 25), []) == ""
+
+
+async def test_build_empty_text(session) -> None:
+    service = NotificationService(session)
+    text = service.build_empty_text(date(2026, 9, 26))
+    assert "ДЕДЛАЙНОВ НА ЗАВТРА НЕТ" in text
+    assert "26 сентября" in text
